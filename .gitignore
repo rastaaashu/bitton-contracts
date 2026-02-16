@@ -1,0 +1,14 @@
+node_modules/
+.env
+coverage/
+coverage.json
+typechain/
+typechain-types/
+cache
+artifacts
+.idea
+.vscode
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
