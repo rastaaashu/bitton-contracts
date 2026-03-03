@@ -34,7 +34,7 @@ contract BTNToken is ERC20, ERC20Permit, Ownable {
         _;
     }
     
-    constructor() ERC20("BitTON", "BTN") ERC20Permit("BitTON") Ownable(msg.sender) {
+    constructor() ERC20("BTN", "BTN") ERC20Permit("BTN") Ownable(msg.sender) {
         // Mint initial supply to deployer
         _mint(msg.sender, MAX_SUPPLY);
         issuedSupply = MAX_SUPPLY;

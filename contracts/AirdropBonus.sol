@@ -3,8 +3,11 @@ pragma solidity ^0.8.27;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract AirdropBonus is Ownable {
+contract AirdropBonus is Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
     IERC20 public btnToken;
 
     struct ReferralInfo {
@@ -49,7 +52,7 @@ contract AirdropBonus is Ownable {
         return referrals[user].referrer;
     }
 
-    function distributeAirdrop(address buyer, uint256 purchaseAmount) external onlyOwner {
+    function distributeAirdrop(address buyer, uint256 purchaseAmount) external onlyOwner nonReentrant {
         address current = buyer;
 
         for (uint256 level = 1; level <= LEVELS; level++) {
@@ -64,7 +67,7 @@ contract AirdropBonus is Ownable {
 
             uint256 bonus = (purchaseAmount * basisPoints) / 10000;
             if (bonus > 0) {
-                btnToken.transfer(current, bonus);
+                btnToken.safeTransfer(current, bonus);
                 emit AirdropDistributed(buyer, current, bonus, level);
             }
         }

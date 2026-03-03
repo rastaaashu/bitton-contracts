@@ -3,9 +3,11 @@ pragma solidity ^0.8.27;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 contract StakingRewards is Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
     IERC20 public btnToken;
     
     struct StakePosition {
@@ -59,7 +61,7 @@ contract StakingRewards is Ownable, ReentrancyGuard {
     function stake(address token, uint256 amount) external nonReentrant {
         require(whitelistedTokens[token], "Token not whitelisted");
         require(amount > 0, "Cannot stake 0");
-        require(IERC20(token).transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
 
         userStakes[msg.sender].push(StakePosition({
             token: token,
@@ -102,7 +104,7 @@ contract StakingRewards is Ownable, ReentrancyGuard {
         require(reward > 0, "No rewards to claim");
 
         position.lastClaimTime = block.timestamp;
-        require(IERC20(position.token).transfer(msg.sender, reward), "Reward transfer failed");
+        IERC20(position.token).safeTransfer(msg.sender, reward);
 
         emit RewardClaimed(msg.sender, reward, stakeIndex);
     }
@@ -122,7 +124,7 @@ contract StakingRewards is Ownable, ReentrancyGuard {
         position.active = false;
 
         // Transfer principal + rewards
-        require(IERC20(token).transfer(msg.sender, amount + reward), "Unstake failed");
+        IERC20(token).safeTransfer(msg.sender, amount + reward);
         
         emit Unstaked(msg.sender, amount, reward);
     }

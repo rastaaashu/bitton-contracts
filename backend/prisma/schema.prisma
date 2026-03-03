@@ -1,0 +1,193 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── User Status Flow ──
+// Email registration: PENDING_EMAIL → (verify email) → PENDING_SPONSOR → (sponsor confirms) → CONFIRMED
+// Wallet-only: CONFIRMED immediately (no email/sponsor needed)
+enum UserStatus {
+  PENDING_EMAIL
+  PENDING_SPONSOR
+  CONFIRMED
+}
+
+// ── Users ──
+model User {
+  id            String     @id @default(uuid())
+  email         String?    @unique
+  passwordHash  String?    @map("password_hash")
+  status        UserStatus @default(PENDING_EMAIL)
+  evmAddress    String?    @unique @map("evm_address")
+  tonAddress    String?    @unique @map("ton_address")
+  sponsorId     String?    @map("sponsor_id")
+  sponsor       User?      @relation("Sponsorship", fields: [sponsorId], references: [id])
+  sponsored     User[]     @relation("Sponsorship")
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+
+  walletLinks            WalletLink[]
+  migrationClaim         MigrationClaim?
+  operatorJobs           OperatorJob[]
+  emailVerificationTokens EmailVerificationToken[]
+  sponsorCodes           SponsorCode[]
+  loginSessions          LoginSession[]
+
+  @@map("users")
+}
+
+// ── Email Verification Tokens ──
+model EmailVerificationToken {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id])
+  token     String   @unique
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([token])
+  @@map("email_verification_tokens")
+}
+
+// ── Sponsor Codes ──
+model SponsorCode {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id])
+  code      String   @unique
+  maxUses   Int      @default(0) @map("max_uses") // 0 = unlimited
+  usedCount Int      @default(0) @map("used_count")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("sponsor_codes")
+}
+
+// ── Login Sessions (JWT tracking) ──
+model LoginSession {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  user         User     @relation(fields: [userId], references: [id])
+  refreshToken String   @unique @map("refresh_token")
+  userAgent    String?  @map("user_agent")
+  ipAddress    String?  @map("ip_address")
+  expiresAt    DateTime @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([refreshToken])
+  @@map("login_sessions")
+}
+
+// ── Wallet Links (TON → EVM mapping) ──
+model WalletLink {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  user        User     @relation(fields: [userId], references: [id])
+  tonAddress  String   @map("ton_address")
+  evmAddress  String   @map("evm_address")
+  signature   String
+  verified    Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([tonAddress, evmAddress])
+  @@map("wallet_links")
+}
+
+// ── TON Snapshot Rows (imported from old system) ──
+model TonSnapshotRow {
+  id          String   @id @default(uuid())
+  tonAddress  String   @unique @map("ton_address")
+  balanceTon  String   @map("balance_ton")
+  balanceBtn  String   @map("balance_btn")
+  snapshotAt  DateTime @map("snapshot_at")
+  importedAt  DateTime @default(now()) @map("imported_at")
+  batchId     String?  @map("batch_id")
+
+  @@map("ton_snapshot_rows")
+}
+
+// ── Migration Claims ──
+model MigrationClaim {
+  id            String      @id @default(uuid())
+  userId        String      @unique @map("user_id")
+  user          User        @relation(fields: [userId], references: [id])
+  tonAddress    String      @map("ton_address")
+  evmAddress    String      @map("evm_address")
+  amountBtn     String      @map("amount_btn")
+  status        ClaimStatus @default(PENDING)
+  txHash        String?     @map("tx_hash")
+  batchId       String?     @map("batch_id")
+  errorMessage  String?     @map("error_message")
+  claimedAt     DateTime?   @map("claimed_at")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+
+  @@map("migration_claims")
+}
+
+enum ClaimStatus {
+  PENDING
+  QUEUED
+  SUBMITTED
+  CONFIRMED
+  FAILED
+}
+
+// ── Operator Jobs (on-chain tx queue) ──
+model OperatorJob {
+  id             String    @id @default(uuid())
+  userId         String?   @map("user_id")
+  user           User?     @relation(fields: [userId], references: [id])
+  jobType        JobType   @map("job_type")
+  payload        Json
+  status         JobStatus @default(PENDING)
+  txHash         String?   @map("tx_hash")
+  gasUsed        String?   @map("gas_used")
+  errorMessage   String?   @map("error_message")
+  retryCount     Int       @default(0) @map("retry_count")
+  maxRetries     Int       @default(3) @map("max_retries")
+  idempotencyKey String?   @unique @map("idempotency_key")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  completedAt    DateTime? @map("completed_at")
+
+  @@index([status, createdAt])
+  @@map("operator_jobs")
+}
+
+enum JobType {
+  DISTRIBUTE
+  BATCH_MIGRATE
+  FUND_CONTRACT
+  SETTLE_WEEKLY
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  SUBMITTED
+  CONFIRMED
+  FAILED
+  CANCELLED
+}
+
+// ── Audit Log ──
+model AuditLog {
+  id        String   @id @default(uuid())
+  actor     String
+  action    String
+  target    String?
+  detail    Json?
+  txHash    String?  @map("tx_hash")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([action, createdAt])
+  @@map("audit_log")
+}
