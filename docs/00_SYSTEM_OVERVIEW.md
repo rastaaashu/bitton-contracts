@@ -21,15 +21,15 @@ BitTON.AI is a staking and rewards platform on Base L2. Users stake BTN tokens (
 
 ### Backend (Node.js + TypeScript)
 
-- **Auth**: Email registration with sponsor confirmation OR wallet-based SIWE
+- **Auth**: Wallet signature mandatory for registration and login. Email + wallet + sponsor required for registration. Challenge-sign flow for login.
 - **Migration**: TON → Base user balance migration pipeline
 - **Operator**: Background job runner for on-chain transactions
 - **Admin**: Snapshot import, job dispatch, system monitoring
 
-### User Entry Points
+### User Entry Point
 
-1. **Email + Sponsor** — Register with email, verify, get sponsor confirmation, then connect wallet
-2. **Wallet-only** — Connect EVM wallet, account created immediately as CONFIRMED
+1. **Register** (`/register?ref=SPONSOR_CODE`) — Fill email + password, connect wallet, sign message, verify email via link -> CONFIRMED
+2. **Login** (`/login`) — Connect wallet, sign challenge -> JWT issued
 
 ## Architecture Diagram
 

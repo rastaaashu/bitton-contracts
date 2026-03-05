@@ -18,3 +18,15 @@ runbook-tx-hashes.json
 testnet-e2e-results.json
 backend/dist/
 backend/node_modules/
+backend/prisma/dev.db
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.netlify/
+frontend/.git-webapp/
+frontend/.env.local
+frontend/*.tsbuildinfo
+frontend/next-env.d.ts
+.claude/
+deliverables.zip
+deliverables/

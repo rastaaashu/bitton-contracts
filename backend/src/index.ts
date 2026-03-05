@@ -12,6 +12,8 @@ import authRouter from "./routes/auth";
 import adminRouter from "./routes/admin";
 import migrationRouter from "./routes/migration";
 import sponsorRouter from "./routes/sponsor";
+import dashboardRouter from "./routes/dashboard";
+import contractsRouter from "./routes/contracts";
 
 const app = express();
 
@@ -26,6 +28,8 @@ app.use("/auth", authRouter);
 app.use("/admin", adminRouter);
 app.use("/migration", migrationRouter);
 app.use("/sponsor", sponsorRouter);
+app.use("/api", dashboardRouter);
+app.use("/api", contractsRouter);
 
 // Error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

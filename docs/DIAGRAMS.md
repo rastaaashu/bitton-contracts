@@ -1,58 +1,68 @@
 # BitTON.AI — System Diagrams
 
-## 1. User Registration Flow (Email + Sponsor)
+## 1. User Registration Flow (Email + Wallet + Sponsor)
 
 ```mermaid
 sequenceDiagram
     participant U as User
+    participant F as Frontend
+    participant W as Wallet (MetaMask)
     participant B as Backend
     participant DB as PostgreSQL
     participant E as Email Service
 
-    U->>B: POST /auth/register-email<br/>{email, password, sponsorCode}
+    U->>F: Visit /register?ref=SPONSOR_CODE
+    U->>F: Fill email + password
+    U->>F: Connect wallet via RainbowKit
+    U->>F: Click "Create Account"
+
+    F->>W: Sign registration message
+    W->>F: signature
+
+    F->>B: POST /auth/register-wallet<br/>{email, password, sponsorCode, address, signature, message}
+    B->>B: Verify wallet signature
+    B->>DB: Check email + wallet uniqueness
+    B->>DB: Validate sponsor code
     B->>DB: Create user (PENDING_EMAIL)
     B->>DB: Create verification token
     B->>E: Send verification email
-    B->>U: 201 {userId, status: PENDING_EMAIL}
+    B->>F: 201 {userId, status: PENDING_EMAIL}
 
-    U->>B: POST /auth/verify-email {token}
+    U->>F: Click email link /verify-email?token=XXX
+    F->>B: POST /auth/verify-email {token}
     B->>DB: Mark token used
-    B->>DB: Update user → PENDING_SPONSOR
-    B->>E: Notify sponsor
-    B->>U: 200 {status: PENDING_SPONSOR}
-
-    Note over U,B: Sponsor logs in and confirms
-
-    U->>B: POST /auth/sponsor/confirm {userId}
     B->>DB: Update user → CONFIRMED
-    B->>U: 200 {status: CONFIRMED}
-
-    U->>B: POST /auth/login-email {email, password}
-    B->>DB: Verify credentials
-    B->>DB: Create login session
-    B->>U: 200 {accessToken, refreshToken}
+    B->>F: 200 {status: CONFIRMED}
 ```
 
-## 2. Wallet Authentication Flow
+## 2. Wallet Login Flow (Challenge-Sign)
 
 ```mermaid
 sequenceDiagram
     participant U as User
+    participant F as Frontend
     participant W as Wallet (MetaMask)
     participant B as Backend
     participant DB as PostgreSQL
 
-    U->>B: POST /auth/challenge {address}
-    B->>U: {message, nonce}
+    U->>F: Visit /login
+    U->>F: Connect wallet via RainbowKit
+    U->>F: Click "Sign in"
 
-    U->>W: Sign message
-    W->>U: signature
+    F->>B: POST /auth/challenge {address}
+    B->>F: {message, nonce}
 
-    U->>B: POST /auth/verify {address, signature, message}
+    F->>W: Sign challenge message
+    W->>F: signature
+
+    F->>B: POST /auth/verify {address, signature, message}
     B->>B: Verify signature (ethers.verifyMessage)
-    B->>DB: Find or create user (CONFIRMED)
+    B->>DB: Find user by wallet (must exist + CONFIRMED)
     B->>DB: Create login session
-    B->>U: 200 {accessToken, refreshToken}
+    B->>F: 200 {accessToken, refreshToken, user}
+
+    F->>F: Store tokens in localStorage
+    F->>F: Redirect to /dashboard
 ```
 
 ## 3. Staking & Reward Lifecycle
@@ -127,11 +137,10 @@ graph TD
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING_EMAIL: Email registration
-    PENDING_EMAIL --> CONFIRMED: Verify email (no sponsor)
+    [*] --> PENDING_EMAIL: register-wallet (email+wallet+sponsor)
+    PENDING_EMAIL --> CONFIRMED: Verify email (no sponsor confirm needed)
     PENDING_EMAIL --> PENDING_SPONSOR: Verify email (has sponsor)
     PENDING_SPONSOR --> CONFIRMED: Sponsor confirms
-    [*] --> CONFIRMED: Wallet auth (immediate)
 ```
 
 ## Exporting to PNG

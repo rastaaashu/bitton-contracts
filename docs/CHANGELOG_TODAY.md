@@ -1,75 +1,64 @@
-# CHANGELOG — 2026-03-02 (Phase 12)
+# CHANGELOG -- 2026-03-05 (Auth Overhaul)
 
-## Backend Auth System (NEW)
+## Auth System Overhaul
 
-### Schema Changes
-- Added `email`, `passwordHash`, `status` (PENDING_EMAIL | PENDING_SPONSOR | CONFIRMED) to User model
-- Added `EmailVerificationToken` model (24h expiry, single-use tokens)
-- Added `SponsorCode` model (unique codes, optional max uses)
-- Added `LoginSession` model (refresh tokens, IP/UA tracking, revocable)
-- Renamed `referrerId` → `sponsorId` on User
-- Added `UserStatus` enum
+### Key Decision
+Wallet signature is now **mandatory** for both registration and login. Users cannot access the system based solely on wallet address -- they must sign to prove ownership. Registration requires a sponsor code (from referral link URL).
 
 ### New Endpoints
-- `POST /auth/register-email` — email + password + optional sponsor code
-- `POST /auth/verify-email` — token verification, status transition
-- `POST /auth/sponsor/confirm` — sponsor confirms referral (JWT)
-- `POST /auth/login-email` — JWT access + refresh token issuance
-- Updated `POST /auth/challenge` + `/auth/verify` — now issue JWTs
-- `POST /auth/link-email` — attach email to wallet-only user (JWT)
-- `POST /auth/link-wallet` — attach wallet to email-only user (JWT)
-- `POST /sponsor/code/create` — create sponsor code (JWT)
-- `GET /sponsor/code/:code` — check code validity
+- `POST /auth/register-wallet` -- email + password + wallet signature + sponsor code (all required)
+- `POST /auth/refresh` -- issue new access token from refresh token
+- `POST /auth/logout` -- revoke refresh token
 
-### New Dependencies
-- `bcrypt` — password hashing (12 salt rounds)
-- `jsonwebtoken` — JWT signing/verification
-- `zod` — input validation schemas
-- `express-rate-limit` — rate limiting (20/15min auth, 10/15min login)
-- `nodemailer` — email sending (SMTP or dev console fallback)
-- `jest` + `ts-jest` — test framework
+### Modified Endpoints
+- `POST /auth/verify` -- **no longer auto-creates users**. Returns 404 if wallet has no registered account, 403 if account is not CONFIRMED.
 
-### New Files
-- `src/middleware/jwtAuth.ts` — JWT middleware + sign functions
-- `src/services/email.service.ts` — verification + sponsor notification emails
-- `src/routes/sponsor.ts` — sponsor code CRUD
-- `src/utils/validation.ts` — 9 Zod schemas
-- `src/__tests__/auth.test.ts` — 29 unit tests
-- `docker-compose.yml` — Postgres for local dev
-- `jest.config.js` — test configuration
+### New Validation Schema
+- `registerWalletSchema` -- validates email, password, sponsorCode (required), address, signature, message
 
-### Modified Files
-- `prisma/schema.prisma` — 4 new models, updated User
-- `src/routes/auth.ts` — complete rewrite with email + wallet flows
-- `src/config/env.ts` — added SMTP, JWT, app URL config; test-friendly fallbacks
-- `src/index.ts` — mounted sponsor routes
-- `package.json` — v2.0.0, added 6 dependencies, 3 dev dependencies, test script
+### Email Service Fix
+- Verification URL now points to frontend route (`/verify-email?token=`) instead of backend route (`/auth/verify-email?token=`)
 
-## Documentation Reset
+### Frontend Auth Infrastructure (NEW)
+- `src/contexts/AuthContext.tsx` -- `AuthProvider` + `useAuth()` hook, manages JWT tokens in localStorage, auto-refresh on mount
+- `src/components/auth/ProtectedRoute.tsx` -- route guard, redirects to `/login` if not authenticated or wallet not connected
+- `src/components/layout/LayoutShell.tsx` -- conditional layout: public pages (login/register/verify-email) get minimal wrapper, protected pages get Sidebar+Header+ProtectedRoute
 
-### Deleted (11 files)
-- ASSUMPTIONS.md, BACKEND_ARCHITECTURE_AND_TON_MIGRATION.md, CUSTODIAL_DISTRIBUTION_SPEC.md
-- END_TO_END_TEST_LOG.md, FUNCTIONALITY_AND_SCOPE_MATRIX.md, MAINNET_READINESS_CHECKLIST.md
-- RUNBOOK_ALL.md, SECURITY_TEST_REPORT.md, SYSTEM_OVERVIEW_AND_STATUS.md
-- TEST_PLAN_AND_SCALE_SIMULATION.md, UI_REQUIREMENTS_FOR_DESIGNER.md
+### Frontend Pages Rewritten
+- `src/app/login/page.tsx` -- wallet-only login with challenge-sign flow (no email form)
+- `src/app/register/page.tsx` -- email + password + wallet connect + sign + sponsor from `?ref=` param (required)
+- `src/app/verify-email/page.tsx` -- NEW, reads `?token=` param, calls backend verify-email
+- `src/app/page.tsx` -- root redirect based on auth state
+- `src/components/layout/Header.tsx` -- added logout button, user email/address display
 
-### Created (8 files)
-- `docs/00_SYSTEM_OVERVIEW.md` — architecture, key numbers, components
-- `docs/01_AUTH_AND_REGISTRATION.md` — both login paths, status flow, data model
-- `docs/02_MIGRATION_TON_TO_BASE.md` — pipeline steps, API examples
-- `docs/03_BACKEND_API.md` — full endpoint reference with request/response
-- `docs/04_CONTRACTS_OVERVIEW.md` — all contracts, roles, wiring, coverage
-- `docs/05_OPERATIONS_RUNBOOK.md` — dev setup, deployment, monitoring, emergency
-- `docs/06_MAINNET_READINESS.md` — status matrix, blockers, next steps
-- `docs/DIAGRAMS.md` — 6 Mermaid diagrams (registration, wallet auth, staking, migration, architecture, status)
+### Modified Frontend Files
+- `src/app/providers.tsx` -- wrapped with `AuthProvider`
+- `src/app/layout.tsx` -- replaced inline sidebar/header with `LayoutShell`
 
-### Kept
-- `docs/DEPLOYMENT_SUMMARY_TESTNET.md` — testnet addresses + tx hashes
+### Token Storage
+- Changed from single `bitton_token` to `bitton_access_token` + `bitton_refresh_token`
+
+### Documentation Updated
+- `docs/00_SYSTEM_OVERVIEW.md` -- updated auth description and user entry points
+- `docs/01_AUTH_AND_REGISTRATION.md` -- complete rewrite reflecting new flows
+- `docs/03_BACKEND_API.md` -- added new endpoints, updated verify behavior
 
 ## Validation
 
-- `npx tsc --noEmit` — clean (0 errors)
-- `npm run build` — dist/ generated
-- `npm test` — 29 passing, 0 failing
-- `npx hardhat test` — 618 passing, 0 failing
-- `scripts/export-diagrams.sh` — created for PNG export
+- `cd backend && npm run build` -- clean (0 errors)
+- `cd frontend && npx tsc --noEmit` -- clean (0 errors)
+- `next build` -- OneDrive file lock on `.next/trace` prevents clean build; all TypeScript compiles successfully
+
+---
+
+## Previous: 2026-03-02 (Phase 12)
+
+### Backend Auth System (Initial)
+- Added email registration, verification, sponsor confirmation, wallet auth
+- Added JWT middleware, email service, sponsor routes
+- Added bcrypt, jsonwebtoken, zod, express-rate-limit, nodemailer
+- Added 29 unit tests
+
+### Documentation Reset
+- Consolidated 11 docs into 8 focused documents
+- Added Mermaid diagrams

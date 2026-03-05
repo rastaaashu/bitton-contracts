@@ -26,7 +26,7 @@ export async function sendVerificationEmail(
   email: string,
   token: string
 ): Promise<void> {
-  const verifyUrl = `${env.appUrl}/auth/verify-email?token=${token}`;
+  const verifyUrl = `${env.appUrl}/verify-email?token=${token}`;
 
   await getTransporter().sendMail({
     from: env.smtpFrom,

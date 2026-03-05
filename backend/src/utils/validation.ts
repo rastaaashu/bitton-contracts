@@ -40,6 +40,15 @@ export const linkWalletSchema = z.object({
   message: z.string().min(1, "Message is required"),
 });
 
+export const registerWalletSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(8, "Password must be at least 8 characters"),
+  sponsorCode: z.string().min(1, "Sponsor code is required"),
+  address: z.string().regex(/^0x[a-fA-F0-9]{40}$/, "Invalid EVM address"),
+  signature: z.string().min(1, "Signature is required"),
+  message: z.string().min(1, "Message is required"),
+});
+
 export const createSponsorCodeSchema = z.object({
   code: z.string().min(3).max(32).regex(/^[a-zA-Z0-9_-]+$/, "Code must be alphanumeric with dashes/underscores"),
   maxUses: z.number().int().min(0).optional().default(0),

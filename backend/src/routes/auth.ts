@@ -8,6 +8,7 @@ import { jwtAuth, signAccessToken, signRefreshToken, JwtPayload } from "../middl
 import { sendVerificationEmail, sendSponsorNotification } from "../services/email.service";
 import {
   registerEmailSchema,
+  registerWalletSchema,
   verifyEmailSchema,
   loginEmailSchema,
   sponsorConfirmSchema,
@@ -122,6 +123,99 @@ router.post("/register-email", authLimiter, async (req: Request, res: Response) 
     });
   } catch (err: any) {
     logger.error("Register email error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ──────────────────────────────────────
+// POST /auth/register-wallet (email + password + wallet signature + sponsor)
+// ──────────────────────────────────────
+router.post("/register-wallet", authLimiter, async (req: Request, res: Response) => {
+  try {
+    const parsed = registerWalletSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.errors[0].message });
+      return;
+    }
+    const { email, password, sponsorCode, address, signature, message } = parsed.data;
+    const normalizedAddr = address.toLowerCase();
+
+    // Verify wallet signature
+    const recoveredAddress = ethers.verifyMessage(message, signature);
+    if (recoveredAddress.toLowerCase() !== normalizedAddr) {
+      res.status(401).json({ error: "Wallet signature verification failed" });
+      return;
+    }
+
+    // Check duplicate email
+    const existingEmail = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+    if (existingEmail) {
+      res.status(409).json({ error: "Email already registered" });
+      return;
+    }
+
+    // Check duplicate wallet
+    const existingWallet = await prisma.user.findFirst({ where: { evmAddress: normalizedAddr } });
+    if (existingWallet) {
+      res.status(409).json({ error: "Wallet already registered" });
+      return;
+    }
+
+    // Validate sponsor code (REQUIRED)
+    const sc = await prisma.sponsorCode.findUnique({ where: { code: sponsorCode } });
+    if (!sc || !sc.active) {
+      res.status(400).json({ error: "Invalid or inactive sponsor code" });
+      return;
+    }
+    if (sc.maxUses > 0 && sc.usedCount >= sc.maxUses) {
+      res.status(400).json({ error: "Sponsor code usage limit reached" });
+      return;
+    }
+    const sponsorId = sc.userId;
+
+    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+
+    const user = await prisma.user.create({
+      data: {
+        email: email.toLowerCase(),
+        passwordHash,
+        evmAddress: normalizedAddr,
+        status: "PENDING_EMAIL",
+        sponsorId,
+      },
+    });
+
+    // Increment sponsor code usage
+    await prisma.sponsorCode.update({
+      where: { code: sponsorCode },
+      data: { usedCount: { increment: 1 } },
+    });
+
+    // Create verification token
+    const token = crypto.randomBytes(32).toString("hex");
+    await prisma.emailVerificationToken.create({
+      data: {
+        userId: user.id,
+        token,
+        expiresAt: new Date(Date.now() + VERIFICATION_TOKEN_EXPIRY_MS),
+      },
+    });
+
+    // Send verification email
+    await sendVerificationEmail(email, token);
+
+    await prisma.auditLog.create({
+      data: { actor: email, action: "auth.register_wallet", target: user.id },
+    });
+
+    res.status(201).json({
+      success: true,
+      userId: user.id,
+      status: user.status,
+      message: "Verification email sent. Please check your inbox.",
+    });
+  } catch (err: any) {
+    logger.error("Register wallet error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -366,12 +460,15 @@ router.post("/verify", authLimiter, async (req: Request, res: Response) => {
 
     challenges.delete(normalizedAddr);
 
-    // Find or create wallet-only user (CONFIRMED immediately)
-    let user = await prisma.user.findFirst({ where: { evmAddress: normalizedAddr } });
+    // Find existing user by wallet — must have registered first
+    const user = await prisma.user.findFirst({ where: { evmAddress: normalizedAddr } });
     if (!user) {
-      user = await prisma.user.create({
-        data: { evmAddress: normalizedAddr, status: "CONFIRMED" },
-      });
+      res.status(404).json({ error: "No account found for this wallet. Please register first." });
+      return;
+    }
+    if (user.status !== "CONFIRMED") {
+      res.status(403).json({ error: `Account not confirmed. Current status: ${user.status}` });
+      return;
     }
 
     const payload: JwtPayload = {
@@ -525,6 +622,76 @@ router.post("/link-wallet", jwtAuth, async (req: Request, res: Response) => {
     res.json({ success: true, evmAddress: normalizedAddr });
   } catch (err: any) {
     logger.error("Link wallet error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ──────────────────────────────────────
+// POST /auth/refresh (issue new access token from refresh token)
+// ──────────────────────────────────────
+router.post("/refresh", async (req: Request, res: Response) => {
+  try {
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+      res.status(400).json({ error: "Refresh token is required" });
+      return;
+    }
+
+    // Validate refresh token exists and is not revoked/expired
+    const session = await prisma.loginSession.findUnique({ where: { refreshToken } });
+    if (!session || session.revokedAt || session.expiresAt < new Date()) {
+      res.status(401).json({ error: "Invalid or expired refresh token" });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: session.userId } });
+    if (!user) {
+      res.status(401).json({ error: "User not found" });
+      return;
+    }
+
+    const payload: JwtPayload = {
+      userId: user.id,
+      email: user.email || undefined,
+      evmAddress: user.evmAddress || undefined,
+    };
+
+    const accessToken = signAccessToken(payload);
+
+    res.json({
+      accessToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        status: user.status,
+        evmAddress: user.evmAddress,
+      },
+    });
+  } catch (err: any) {
+    logger.error("Refresh token error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ──────────────────────────────────────
+// POST /auth/logout (revoke refresh token)
+// ──────────────────────────────────────
+router.post("/logout", async (req: Request, res: Response) => {
+  try {
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+      res.status(400).json({ error: "Refresh token is required" });
+      return;
+    }
+
+    await prisma.loginSession.updateMany({
+      where: { refreshToken, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+
+    res.json({ success: true });
+  } catch (err: any) {
+    logger.error("Logout error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

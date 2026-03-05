@@ -50,6 +50,41 @@ export const REWARD_ENGINE_ABI = [
   "event WeeklySettlement(address indexed user, uint256 totalReward, uint256 withdrawable, uint256 vested)",
 ];
 
+export const VAULT_MANAGER_ABI = [
+  "function isVaultActive(address user) view returns (bool)",
+  "function getUserTier(address user) view returns (uint8)",
+  "event VaultActivated(address indexed user, uint8 tier, address paymentToken, uint256 amount)",
+];
+
+export const STAKING_VAULT_ABI = [
+  "function getStakes(address user) view returns (tuple(uint256 amount, uint256 startTime, uint8 programType, uint256 lastRewardTime, bool active)[])",
+  "function getPendingRewards(address user, uint256 stakeIndex) view returns (uint256)",
+  "function totalStaked() view returns (uint256)",
+  "event Staked(address indexed user, uint256 amount, uint8 programType, uint256 stakeIndex)",
+  "event Unstaked(address indexed user, uint256 stakeIndex, uint256 amount, uint256 penalty)",
+];
+
+export const VESTING_POOL_ABI = [
+  "function getVestedBalance(address user) view returns (uint256)",
+  "function getPendingRelease(address user) view returns (uint256)",
+  "event VestingAdded(address indexed user, uint256 amount)",
+  "event VestingReleased(address indexed user, uint256 amount)",
+];
+
+export const WITHDRAWAL_WALLET_ABI = [
+  "function getWithdrawableBalance(address user) view returns (uint256)",
+  "event Withdrawn(address indexed user, uint256 amount)",
+  "event WithdrawableAdded(address indexed user, uint256 amount)",
+];
+
+export const BONUS_ENGINE_ABI = [
+  "function getReferrer(address user) view returns (address)",
+  "function getDownline(address user) view returns (address[])",
+  "event ReferrerRegistered(address indexed user, address indexed referrer)",
+  "event DirectBonusPaid(address indexed referrer, address indexed staker, uint256 amount)",
+  "event MatchingBonusPaid(address indexed recipient, address indexed source, uint256 amount, uint8 level)",
+];
+
 // Provider + Signer
 let _provider: ethers.JsonRpcProvider | null = null;
 let _signer: ethers.Wallet | null = null;
@@ -90,5 +125,45 @@ export function getRewardEngineContract(signerOrProvider?: ethers.Signer | ether
     env.contracts.rewardEngine,
     REWARD_ENGINE_ABI,
     signerOrProvider || getRelayerSigner()
+  );
+}
+
+export function getVaultManagerContract(signerOrProvider?: ethers.Signer | ethers.Provider): ethers.Contract {
+  return new ethers.Contract(
+    env.contracts.vaultManager,
+    VAULT_MANAGER_ABI,
+    signerOrProvider || getProvider()
+  );
+}
+
+export function getStakingVaultContract(signerOrProvider?: ethers.Signer | ethers.Provider): ethers.Contract {
+  return new ethers.Contract(
+    env.contracts.stakingVault,
+    STAKING_VAULT_ABI,
+    signerOrProvider || getProvider()
+  );
+}
+
+export function getVestingPoolContract(signerOrProvider?: ethers.Signer | ethers.Provider): ethers.Contract {
+  return new ethers.Contract(
+    env.contracts.vestingPool,
+    VESTING_POOL_ABI,
+    signerOrProvider || getProvider()
+  );
+}
+
+export function getWithdrawalWalletContract(signerOrProvider?: ethers.Signer | ethers.Provider): ethers.Contract {
+  return new ethers.Contract(
+    env.contracts.withdrawalWallet,
+    WITHDRAWAL_WALLET_ABI,
+    signerOrProvider || getProvider()
+  );
+}
+
+export function getBonusEngineContract(signerOrProvider?: ethers.Signer | ethers.Provider): ethers.Contract {
+  return new ethers.Contract(
+    env.contracts.bonusEngine,
+    BONUS_ENGINE_ABI,
+    signerOrProvider || getProvider()
   );
 }

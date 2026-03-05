@@ -1,19 +1,49 @@
-# BitTON.AI — Backend API Reference
+# BitTON.AI -- Backend API Reference
 
- (dev) | `https://api.bitton.ai` (prod)
+Base URL: `http://localhost:3001` (dev) | `https://api.bitton.ai` (prod)
 
 ## Auth Endpoints
 
-### POST /auth/register-email
+### POST /auth/register-wallet
 
-Register a new user with email.
+Register a new user with email + wallet signature + sponsor code (all required).
 
 **Request:**
 ```json
 {
   "email": "user@example.com",
   "password": "securepass123",
-  "sponsorCode": "ABC123"  // optional
+  "sponsorCode": "ABC123",
+  "address": "0x1234...abcd",
+  "signature": "0x...",
+  "message": "Sign this message to register with BitTON.AI\n\nEmail: user@example.com\nAddress: 0x1234\nTimestamp: ..."
+}
+```
+
+**Response (201):**
+```json
+{
+  "success": true,
+  "userId": "uuid",
+  "status": "PENDING_EMAIL",
+  "message": "Verification email sent. Please check your inbox."
+}
+```
+
+**Errors:** 400 (invalid input, bad sponsor code), 401 (bad signature), 409 (email/wallet exists)
+
+---
+
+### POST /auth/register-email
+
+Register with email only (legacy, sponsor optional).
+
+**Request:**
+```json
+{
+  "email": "user@example.com",
+  "password": "securepass123",
+  "sponsorCode": "ABC123"
 }
 ```
 
@@ -42,10 +72,60 @@ Register a new user with email.
 ```json
 {
   "success": true,
-  "status": "PENDING_SPONSOR",
-  "message": "Email verified. Waiting for sponsor confirmation."
+  "status": "CONFIRMED",
+  "message": "Email verified. Account is active."
 }
 ```
+
+---
+
+### POST /auth/challenge
+
+Get a challenge message for wallet signature authentication.
+
+**Request:**
+```json
+{ "address": "0x1234...abcd" }
+```
+
+**Response (200):**
+```json
+{
+  "message": "Sign this message to authenticate with BitTON.AI\n\nNonce: ...",
+  "nonce": "hex-nonce"
+}
+```
+
+---
+
+### POST /auth/verify
+
+Verify wallet signature and issue JWT. **Requires existing registered account.**
+
+**Request:**
+```json
+{
+  "address": "0x1234...abcd",
+  "signature": "0xdeadbeef...",
+  "message": "Sign this message..."
+}
+```
+
+**Response (200):**
+```json
+{
+  "accessToken": "eyJ...",
+  "refreshToken": "eyJ...",
+  "user": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "status": "CONFIRMED",
+    "evmAddress": "0x1234...abcd"
+  }
+}
+```
+
+**Errors:** 401 (bad signature/expired challenge), 403 (account not confirmed), 404 (no account for wallet)
 
 ---
 
@@ -68,7 +148,7 @@ Register a new user with email.
     "id": "uuid",
     "email": "user@example.com",
     "status": "CONFIRMED",
-    "evmAddress": null
+    "evmAddress": "0x..."
   }
 }
 ```
@@ -77,46 +157,44 @@ Register a new user with email.
 
 ---
 
-### POST /auth/challenge
+### POST /auth/refresh
+
+Issue a new access token from a valid refresh token.
 
 **Request:**
 ```json
-{ "address": "0x1234...abcd" }
-```
-
-**Response (200):**
-```json
-{
-  "message": "Sign this message to authenticate with BitTON.AI\n\nNonce: ...",
-  "nonce": "hex-nonce"
-}
-```
-
----
-
-### POST /auth/verify
-
-**Request:**
-```json
-{
-  "address": "0x1234...abcd",
-  "signature": "0xdeadbeef...",
-  "message": "Sign this message..."
-}
+{ "refreshToken": "eyJ..." }
 ```
 
 **Response (200):**
 ```json
 {
   "accessToken": "eyJ...",
-  "refreshToken": "eyJ...",
   "user": {
     "id": "uuid",
-    "email": null,
+    "email": "user@example.com",
     "status": "CONFIRMED",
-    "evmAddress": "0x1234...abcd"
+    "evmAddress": "0x..."
   }
 }
+```
+
+**Errors:** 401 (invalid/expired/revoked refresh token)
+
+---
+
+### POST /auth/logout
+
+Revoke a refresh token.
+
+**Request:**
+```json
+{ "refreshToken": "eyJ..." }
+```
+
+**Response (200):**
+```json
+{ "success": true }
 ```
 
 ---
@@ -243,6 +321,18 @@ Register a new user with email.
 
 ---
 
+## Dashboard Endpoints
+
+### GET /api/dashboard/:address
+
+Returns user dashboard data including contract state.
+
+### GET /api/dashboard/:address/history
+
+Returns transaction history for a user.
+
+---
+
 ## Health
 
 ### GET /health
@@ -251,7 +341,7 @@ Register a new user with email.
 ```json
 {
   "status": "ok",
-  "timestamp": "2026-03-02T...",
+  "timestamp": "2026-03-05T...",
   "chain": { "chainId": 84532, "blockNumber": 12345 },
   "relayer": { "address": "0x...", "ethBalance": 0.5 },
   "db": "connected"
