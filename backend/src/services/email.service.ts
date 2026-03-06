@@ -4,90 +4,144 @@ import { logger } from "../utils/logger";
 
 let cachedTransporter: nodemailer.Transporter | null = null;
 
-function getTransporter(): nodemailer.Transporter {
-  if (env.smtpHost) {
-    if (!cachedTransporter) {
-      cachedTransporter = nodemailer.createTransport({
-        host: env.smtpHost,
-        port: env.smtpPort,
-        secure: env.smtpPort === 465,
-        auth: { user: env.smtpUser, pass: env.smtpPass },
-        connectionTimeout: 10000,
-        greetingTimeout: 10000,
-        socketTimeout: 15000,
-      });
-      logger.info(`SMTP transporter created: ${env.smtpHost}:${env.smtpPort} user=${env.smtpUser}`);
+function getSmtpTransporter(): nodemailer.Transporter | null {
+  if (!env.smtpHost) return null;
+  if (!cachedTransporter) {
+    cachedTransporter = nodemailer.createTransport({
+      host: env.smtpHost,
+      port: env.smtpPort,
+      secure: env.smtpPort === 465,
+      auth: { user: env.smtpUser, pass: env.smtpPass },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
+    });
+  }
+  return cachedTransporter;
+}
+
+/**
+ * Send email via HTTP API (Resend or SendGrid).
+ * Works on platforms that block outbound SMTP (e.g. Render free tier).
+ */
+async function sendViaHttpApi(
+  to: string, subject: string, text: string, html: string
+): Promise<string> {
+  const provider = env.emailApiProvider;
+  const apiKey = env.emailApiKey;
+  const from = env.smtpFrom;
+
+  if (provider === "resend") {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ from, to, subject, text, html }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Resend API error: ${res.status} ${err}`);
     }
-    return cachedTransporter;
+    const data = (await res.json()) as { id: string };
+    return data.id;
   }
 
-  // Dev fallback: log emails to console
-  return {
-    sendMail: async (opts: any) => {
-      logger.info(`[DEV EMAIL] To: ${opts.to} Subject: ${opts.subject}`);
-      logger.debug(`[DEV EMAIL] Body: ${opts.text || opts.html}`);
-      return { messageId: "dev-" + Date.now() };
-    },
-  } as any;
+  if (provider === "sendgrid") {
+    const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: to }] }],
+        from: { email: env.smtpUser, name: "BitTON.AI" },
+        subject,
+        content: [
+          { type: "text/plain", value: text },
+          { type: "text/html", value: html },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`SendGrid API error: ${res.status} ${err}`);
+    }
+    return res.headers.get("x-message-id") || "sendgrid-" + Date.now();
+  }
+
+  throw new Error(`Unknown email provider: ${provider}`);
+}
+
+async function sendEmail(
+  to: string, subject: string, text: string, html: string
+): Promise<void> {
+  // Priority 1: HTTP email API (works on all platforms)
+  if (env.emailApiKey) {
+    const id = await sendViaHttpApi(to, subject, text, html);
+    logger.info(`Email sent to ${to} via ${env.emailApiProvider} API, id=${id}`);
+    return;
+  }
+
+  // Priority 2: SMTP (works locally, blocked on some hosts)
+  const transporter = getSmtpTransporter();
+  if (transporter) {
+    const result = await transporter.sendMail({
+      from: env.smtpFrom, to, subject, text, html,
+    });
+    logger.info(`Email sent to ${to} via SMTP, messageId=${result.messageId}`);
+    return;
+  }
+
+  // Priority 3: Dev console fallback
+  logger.info(`[DEV EMAIL] To: ${to} Subject: ${subject}`);
+  logger.debug(`[DEV EMAIL] Body: ${text}`);
 }
 
 export async function sendOtpEmail(email: string, otp: string): Promise<void> {
   try {
-    const result = await getTransporter().sendMail({
-      from: env.smtpFrom,
-      to: email,
-      subject: "BitTON.AI - Your verification code",
-      text: `Your verification code is: ${otp}\n\nThis code expires in 10 minutes.\n\nIf you did not request this code, please ignore this email.`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 400px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #333;">BitTON.AI Verification</h2>
-          <p>Your verification code is:</p>
-          <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; text-align: center; padding: 20px; background: #f5f5f5; border-radius: 8px; margin: 16px 0;">
-            ${otp}
-          </div>
-          <p style="color: #666; font-size: 14px;">This code expires in 10 minutes.</p>
-          <p style="color: #999; font-size: 12px;">If you did not request this code, please ignore this email.</p>
+    await sendEmail(
+      email,
+      "BitTON.AI - Your verification code",
+      `Your verification code is: ${otp}\n\nThis code expires in 10 minutes.\n\nIf you did not request this code, please ignore this email.`,
+      `<div style="font-family: Arial, sans-serif; max-width: 400px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #333;">BitTON.AI Verification</h2>
+        <p>Your verification code is:</p>
+        <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; text-align: center; padding: 20px; background: #f5f5f5; border-radius: 8px; margin: 16px 0;">
+          ${otp}
         </div>
-      `,
-    });
-    logger.info(`OTP email sent to ${email}, messageId=${result.messageId}`);
+        <p style="color: #666; font-size: 14px;">This code expires in 10 minutes.</p>
+        <p style="color: #999; font-size: 12px;">If you did not request this code, please ignore this email.</p>
+      </div>`
+    );
   } catch (err: any) {
     logger.error(`Failed to send OTP email to ${email}: ${err.message}`);
-    // Reset transporter on failure so next attempt creates fresh connection
     cachedTransporter = null;
-    throw new Error(`Email delivery failed: ${err.message}`);
+    throw err;
   }
 }
 
 // Legacy functions kept for backwards compatibility
 export async function sendVerificationEmail(email: string, token: string): Promise<void> {
   const verifyUrl = `${env.appUrl}/verify-email?token=${token}`;
-
-  await getTransporter().sendMail({
-    from: env.smtpFrom,
-    to: email,
-    subject: "BitTON.AI - Verify your email",
-    text: `Verify your email by visiting: ${verifyUrl}\n\nThis link expires in 24 hours.`,
-    html: `<p>Click to verify your email:</p><p><a href="${verifyUrl}">${verifyUrl}</a></p><p>This link expires in 24 hours.</p>`,
-  });
-
-  logger.info(`Verification email sent to ${email}`);
+  await sendEmail(
+    email,
+    "BitTON.AI - Verify your email",
+    `Verify your email by visiting: ${verifyUrl}\n\nThis link expires in 24 hours.`,
+    `<p>Click to verify your email:</p><p><a href="${verifyUrl}">${verifyUrl}</a></p><p>This link expires in 24 hours.</p>`
+  );
 }
 
 export async function sendSponsorNotification(
-  sponsorEmail: string,
-  newUserEmail: string,
-  userId: string
+  sponsorEmail: string, newUserEmail: string, userId: string
 ): Promise<void> {
   const confirmUrl = `${env.appUrl}/sponsor/confirm?userId=${userId}`;
-
-  await getTransporter().sendMail({
-    from: env.smtpFrom,
-    to: sponsorEmail,
-    subject: "BitTON.AI - New referral pending your confirmation",
-    text: `${newUserEmail} registered with your sponsor code.\n\nConfirm: ${confirmUrl}`,
-    html: `<p><strong>${newUserEmail}</strong> registered with your sponsor code.</p><p><a href="${confirmUrl}">Confirm referral</a></p>`,
-  });
-
-  logger.info(`Sponsor notification sent to ${sponsorEmail}`);
+  await sendEmail(
+    sponsorEmail,
+    "BitTON.AI - New referral pending your confirmation",
+    `${newUserEmail} registered with your sponsor code.\n\nConfirm: ${confirmUrl}`,
+    `<p><strong>${newUserEmail}</strong> registered with your sponsor code.</p><p><a href="${confirmUrl}">Confirm referral</a></p>`
+  );
 }
