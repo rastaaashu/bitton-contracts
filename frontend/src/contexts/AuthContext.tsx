@@ -87,6 +87,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const data = await res.json();
       localStorage.setItem(ACCESS_TOKEN_KEY, data.accessToken);
+      if (data.refreshToken) {
+        localStorage.setItem(REFRESH_TOKEN_KEY, data.refreshToken);
+      }
       setAccessToken(data.accessToken);
       setUser(data.user);
       return true;

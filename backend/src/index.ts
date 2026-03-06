@@ -19,7 +19,16 @@ const app = express();
 
 // Middleware
 app.use(helmet());
-app.use(cors());
+app.use(cors({
+  origin: [
+    env.appUrl,
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:3002",
+    "http://localhost:3003",
+  ].filter(Boolean),
+  credentials: true,
+}));
 app.use(express.json({ limit: "10mb" }));
 
 // Routes
@@ -37,11 +46,32 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
   res.status(500).json({ error: "Internal server error" });
 });
 
+// Cleanup expired auth data periodically
+async function cleanupExpiredAuthData() {
+  try {
+    const now = new Date();
+    const [sessions, otps, challenges] = await prisma.$transaction([
+      prisma.pendingSession.deleteMany({ where: { expiresAt: { lt: now } } }),
+      prisma.otpCode.deleteMany({ where: { expiresAt: { lt: now } } }),
+      prisma.walletChallenge.deleteMany({ where: { expiresAt: { lt: now } } }),
+    ]);
+    if (sessions.count + otps.count + challenges.count > 0) {
+      logger.info(`Cleanup: removed ${sessions.count} sessions, ${otps.count} OTPs, ${challenges.count} challenges`);
+    }
+  } catch (err: any) {
+    logger.warn(`Cleanup error: ${err.message}`);
+  }
+}
+
 // Start
 async function main() {
   // Connect to DB
   await prisma.$connect();
   logger.info("Database connected");
+
+  // Initial cleanup + schedule every 30 min
+  await cleanupExpiredAuthData();
+  setInterval(cleanupExpiredAuthData, 30 * 60 * 1000);
 
   // Start HTTP server
   const server = app.listen(env.port, () => {

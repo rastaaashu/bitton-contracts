@@ -28,10 +28,12 @@ const SESSION_EXPIRY_MS = 30 * 60 * 1000; // 30 min
 const OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 min
 const OTP_MAX_ATTEMPTS = 5;
 
-// Rate limiters
+// Rate limiters (disabled in test env)
+const isTest = process.env.NODE_ENV === "test";
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: isTest ? 1000 : 20,
   message: { error: "Too many requests, try again later" },
   standardHeaders: true,
   legacyHeaders: false,
@@ -39,7 +41,7 @@ const authLimiter = rateLimit({
 
 const otpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
+  max: isTest ? 1000 : 5,
   message: { error: "Too many OTP requests, try again later" },
   standardHeaders: true,
   legacyHeaders: false,
@@ -49,6 +51,27 @@ const otpLimiter = rateLimit({
 
 function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+function generateSponsorCode(): string {
+  return "BTN-" + crypto.randomBytes(4).toString("hex").toUpperCase();
+}
+
+function isPrismaUniqueError(err: any): boolean {
+  return err?.code === "P2002";
+}
+
+/** Auto-create a sponsor code for a newly registered user */
+async function autoCreateSponsorCode(userId: string): Promise<void> {
+  try {
+    const code = generateSponsorCode();
+    await prisma.sponsorCode.create({
+      data: { userId, code, maxUses: 0 },
+    });
+  } catch (err: any) {
+    // Non-critical — log and continue
+    logger.warn(`Failed to auto-create sponsor code for user ${userId}: ${err.message}`);
+  }
 }
 
 /**
@@ -103,15 +126,21 @@ async function createSession(userId: string, req: Request): Promise<{ accessToke
   const accessToken = signAccessToken(payload);
   const refreshToken = signRefreshToken(payload);
 
-  await prisma.loginSession.create({
-    data: {
-      userId: user.id,
-      refreshToken,
-      userAgent: req.headers["user-agent"] || null,
-      ipAddress: req.ip || null,
-      expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS),
-    },
-  });
+  await prisma.$transaction([
+    prisma.loginSession.create({
+      data: {
+        userId: user.id,
+        refreshToken,
+        userAgent: req.headers["user-agent"] || null,
+        ipAddress: req.ip || null,
+        expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS),
+      },
+    }),
+    prisma.user.update({
+      where: { id: userId },
+      data: { lastLoginAt: new Date() },
+    }),
+  ]);
 
   return { accessToken, refreshToken };
 }
@@ -162,16 +191,26 @@ router.post("/register/wallet", authLimiter, async (req: Request, res: Response)
     }
 
     // Create user (immediately CONFIRMED)
-    const user = await prisma.user.create({
-      data: {
-        evmAddress: normalizedAddr,
-        authMethod: "WALLET",
-        status: "CONFIRMED",
-        sponsorId: sponsor.sponsorId,
-      },
-    });
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: {
+          evmAddress: normalizedAddr,
+          authMethod: "WALLET",
+          status: "CONFIRMED",
+          sponsorId: sponsor.sponsorId,
+        },
+      });
+    } catch (createErr: any) {
+      if (isPrismaUniqueError(createErr)) {
+        res.status(409).json({ error: "Wallet or identity already registered" });
+        return;
+      }
+      throw createErr;
+    }
 
     await incrementSponsorCode(sponsor.sponsorCodeRecord);
+    await autoCreateSponsorCode(user.id);
 
     const tokens = await createSession(user.id, req);
 
@@ -431,21 +470,31 @@ router.post("/register/email/complete", authLimiter, async (req: Request, res: R
     }
 
     // Create user
-    const user = await prisma.user.create({
-      data: {
-        email: session.email!,
-        evmAddress: normalizedAddr,
-        authMethod: "EMAIL",
-        status: "CONFIRMED",
-        emailVerifiedAt: new Date(),
-        sponsorId: sponsor.sponsorId,
-      },
-    });
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: {
+          email: session.email!,
+          evmAddress: normalizedAddr,
+          authMethod: "EMAIL",
+          status: "CONFIRMED",
+          emailVerifiedAt: new Date(),
+          sponsorId: sponsor.sponsorId,
+        },
+      });
+    } catch (createErr: any) {
+      if (isPrismaUniqueError(createErr)) {
+        res.status(409).json({ error: "Email or wallet already registered" });
+        return;
+      }
+      throw createErr;
+    }
 
     await incrementSponsorCode(sponsor.sponsorCodeRecord);
+    await autoCreateSponsorCode(user.id);
 
     // Clean up session
-    await prisma.pendingSession.delete({ where: { id: sessionId } });
+    await prisma.pendingSession.delete({ where: { id: sessionId } }).catch(() => {});
 
     const tokens = await createSession(user.id, req);
 
@@ -573,19 +622,29 @@ router.post("/register/telegram/complete", authLimiter, async (req: Request, res
     }
 
     // Create user
-    const user = await prisma.user.create({
-      data: {
-        telegramId: session.telegramId!,
-        evmAddress: normalizedAddr,
-        authMethod: "TELEGRAM",
-        status: "CONFIRMED",
-        sponsorId: sponsor.sponsorId,
-      },
-    });
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: {
+          telegramId: session.telegramId!,
+          evmAddress: normalizedAddr,
+          authMethod: "TELEGRAM",
+          status: "CONFIRMED",
+          sponsorId: sponsor.sponsorId,
+        },
+      });
+    } catch (createErr: any) {
+      if (isPrismaUniqueError(createErr)) {
+        res.status(409).json({ error: "Telegram account or wallet already registered" });
+        return;
+      }
+      throw createErr;
+    }
 
     await incrementSponsorCode(sponsor.sponsorCodeRecord);
+    await autoCreateSponsorCode(user.id);
 
-    await prisma.pendingSession.delete({ where: { id: sessionId } });
+    await prisma.pendingSession.delete({ where: { id: sessionId } }).catch(() => {});
 
     const tokens = await createSession(user.id, req);
 
@@ -660,6 +719,12 @@ router.post("/login/wallet/verify", authLimiter, async (req: Request, res: Respo
     });
     if (!challenge || challenge.expiresAt < new Date()) {
       res.status(401).json({ error: "Challenge expired or not found. Please try again." });
+      return;
+    }
+
+    // Verify the signed message matches the issued challenge
+    if (message !== challenge.message) {
+      res.status(401).json({ error: "Message does not match the issued challenge" });
       return;
     }
 
@@ -963,8 +1028,27 @@ router.post("/refresh", async (req: Request, res: Response) => {
 
     const accessToken = signAccessToken(payload);
 
+    // Rotate refresh token: revoke old, issue new
+    const newRefreshToken = signRefreshToken(payload);
+    await prisma.$transaction([
+      prisma.loginSession.update({
+        where: { id: session.id },
+        data: { revokedAt: new Date() },
+      }),
+      prisma.loginSession.create({
+        data: {
+          userId: user.id,
+          refreshToken: newRefreshToken,
+          userAgent: req.headers["user-agent"] || null,
+          ipAddress: req.ip || null,
+          expiresAt: new Date(Date.now() + REFRESH_TOKEN_EXPIRY_MS),
+        },
+      }),
+    ]);
+
     res.json({
       accessToken,
+      refreshToken: newRefreshToken,
       user: userResponse(user),
     });
   } catch (err: any) {

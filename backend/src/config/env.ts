@@ -39,7 +39,7 @@ export const env = {
   },
 
   // Auth
-  authSecret: optional("AUTH_SECRET", "dev-secret"),
+  authSecret: process.env.NODE_ENV === "production" ? required("AUTH_SECRET") : optional("AUTH_SECRET", "dev-secret"),
   jwtAccessExpiry: optional("JWT_ACCESS_EXPIRY", "15m"),
   jwtRefreshExpiry: optional("JWT_REFRESH_EXPIRY", "7d"),
   adminApiKey: optional("ADMIN_API_KEY", "dev-admin-key"),

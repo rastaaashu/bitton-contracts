@@ -204,4 +204,82 @@ router.get("/audit", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * GET /admin/users
+ * List users with pagination
+ */
+router.get("/users", async (req: Request, res: Response) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+    const search = req.query.search as string | undefined;
+
+    const where = search
+      ? {
+          OR: [
+            { email: { contains: search, mode: "insensitive" as const } },
+            { evmAddress: { contains: search.toLowerCase() } },
+            { telegramId: search },
+          ],
+        }
+      : {};
+
+    const [users, total] = await Promise.all([
+      prisma.user.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true,
+          email: true,
+          evmAddress: true,
+          telegramId: true,
+          authMethod: true,
+          status: true,
+          sponsorId: true,
+          lastLoginAt: true,
+          createdAt: true,
+          sponsorCodes: { select: { code: true, usedCount: true } },
+          _count: { select: { sponsored: true } },
+        },
+      }),
+      prisma.user.count({ where }),
+    ]);
+
+    res.json({ users, total, page, limit });
+  } catch (err: any) {
+    logger.error("List users error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /admin/users/:id
+ * Get single user detail
+ */
+router.get("/users/:id", async (req: Request, res: Response) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.params.id as string },
+      include: {
+        sponsorCodes: true,
+        sponsored: { select: { id: true, evmAddress: true, email: true, createdAt: true } },
+        loginSessions: {
+          orderBy: { createdAt: "desc" },
+          take: 5,
+          select: { createdAt: true, ipAddress: true, userAgent: true, revokedAt: true },
+        },
+      },
+    });
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    res.json(user);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

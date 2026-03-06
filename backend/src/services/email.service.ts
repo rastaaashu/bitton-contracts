@@ -99,8 +99,8 @@ async function sendEmail(
   }
 
   // Priority 3: Dev console fallback
-  logger.info(`[DEV EMAIL] To: ${to} Subject: ${subject}`);
-  logger.debug(`[DEV EMAIL] Body: ${text}`);
+  logger.info(`[DEV EMAIL] To: ${to} | Subject: ${subject}`);
+  logger.info(`[DEV EMAIL] Body: ${text}`);
 }
 
 export async function sendOtpEmail(email: string, otp: string): Promise<void> {
