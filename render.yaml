@@ -1,0 +1,53 @@
+services:
+  - type: web
+    name: bitton-backend
+    runtime: node
+    region: ohio
+    plan: free
+    rootDir: backend
+    buildCommand: npm install && npx prisma generate && npm run build
+    startCommand: npm run start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false # set manually in Render dashboard
+      - key: RPC_URL
+        value: https://sepolia.base.org
+      - key: CHAIN_ID
+        value: "84532"
+      - key: RELAYER_PRIVATE_KEY
+        sync: false
+      - key: BTN_TOKEN_ADDRESS
+        value: "0xa874ae78f2A9f3EE6551ebdAf32f5B3bcF0a575D"
+      - key: USDT_TOKEN_ADDRESS
+        value: "0x1f15CdaACC32D6cA77FaaC8B080a3f2C0F597316"
+      - key: CUSTODIAL_ADDRESS
+        value: "0x71dB030B792E9D4CfdCC7e452e0Ff55CdB5A4D99"
+      - key: VAULT_MANAGER_ADDRESS
+        value: "0xA2b5ffe829441768E8BB8Be49f8ADee0041Fa1b0"
+      - key: STAKING_VAULT_ADDRESS
+        value: "0x50d1516D6d5A4930623BCb7e1Ed28e9fAeA1e82F"
+      - key: REWARD_ENGINE_ADDRESS
+        value: "0xa86F6abB543b3fa6a2E2cC001870cF60a04c7f31"
+      - key: VESTING_POOL_ADDRESS
+        value: "0xa3DC3351670E253d22B783109935fe0B9a11b830"
+      - key: WITHDRAWAL_WALLET_ADDRESS
+        value: "0xA06238c206C2757AD3f1572464bf720161519eC5"
+      - key: BONUS_ENGINE_ADDRESS
+        value: "0xFD57598058EC849980F87F0f44bb019A73a0EfC7"
+      - key: AUTH_SECRET
+        sync: false
+      - key: JWT_ACCESS_EXPIRY
+        value: "15m"
+      - key: JWT_REFRESH_EXPIRY
+        value: "7d"
+      - key: ADMIN_API_KEY
+        sync: false
+      - key: EMAIL_API_KEY
+        sync: false
+      - key: EMAIL_API_PROVIDER
+        value: resend
+      - key: APP_URL
+        sync: false

@@ -45,27 +45,44 @@ const otpLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// In-memory nonce store (use Redis in production)
-const challenges = new Map<string, { nonce: string; expiresAt: number }>();
-
 // ── Helpers ──
 
 function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-async function validateSponsorCode(code: string): Promise<{ valid: boolean; sponsorId?: string; error?: string }> {
-  const sc = await prisma.sponsorCode.findUnique({ where: { code } });
+/**
+ * Validate a sponsor reference - accepts EITHER a sponsor code string OR an EVM wallet address.
+ * If it's an EVM address (0x + 40 hex chars), look up the user by wallet address.
+ * Otherwise, look it up as a SponsorCode.code string.
+ */
+async function validateSponsorCode(codeOrAddress: string): Promise<{ valid: boolean; sponsorId?: string; sponsorCodeRecord?: string; error?: string }> {
+  const isEvmAddress = /^0x[a-fA-F0-9]{40}$/.test(codeOrAddress);
+
+  if (isEvmAddress) {
+    // Look up user by wallet address directly
+    const user = await prisma.user.findFirst({
+      where: { evmAddress: codeOrAddress.toLowerCase() },
+    });
+    if (!user || user.status !== "CONFIRMED") {
+      return { valid: false, error: "Referrer wallet address not found or not active" };
+    }
+    return { valid: true, sponsorId: user.id };
+  }
+
+  // Otherwise treat as sponsor code string
+  const sc = await prisma.sponsorCode.findUnique({ where: { code: codeOrAddress } });
   if (!sc || !sc.active) {
     return { valid: false, error: "Invalid or inactive sponsor code" };
   }
   if (sc.maxUses > 0 && sc.usedCount >= sc.maxUses) {
     return { valid: false, error: "Sponsor code usage limit reached" };
   }
-  return { valid: true, sponsorId: sc.userId };
+  return { valid: true, sponsorId: sc.userId, sponsorCodeRecord: sc.code };
 }
 
-async function incrementSponsorCode(code: string): Promise<void> {
+async function incrementSponsorCode(code: string | undefined): Promise<void> {
+  if (!code) return; // No sponsor code to increment (was a wallet address referral)
   await prisma.sponsorCode.update({
     where: { code },
     data: { usedCount: { increment: 1 } },
@@ -137,7 +154,7 @@ router.post("/register/wallet", authLimiter, async (req: Request, res: Response)
       return;
     }
 
-    // Validate sponsor
+    // Validate sponsor (accepts sponsor code OR wallet address)
     const sponsor = await validateSponsorCode(sponsorCode);
     if (!sponsor.valid) {
       res.status(400).json({ error: sponsor.error });
@@ -154,7 +171,7 @@ router.post("/register/wallet", authLimiter, async (req: Request, res: Response)
       },
     });
 
-    await incrementSponsorCode(sponsorCode);
+    await incrementSponsorCode(sponsor.sponsorCodeRecord);
 
     const tokens = await createSession(user.id, req);
 
@@ -406,7 +423,7 @@ router.post("/register/email/complete", authLimiter, async (req: Request, res: R
       return;
     }
 
-    // Validate sponsor
+    // Validate sponsor (accepts sponsor code OR wallet address)
     const sponsor = await validateSponsorCode(sponsorCode);
     if (!sponsor.valid) {
       res.status(400).json({ error: sponsor.error });
@@ -425,7 +442,7 @@ router.post("/register/email/complete", authLimiter, async (req: Request, res: R
       },
     });
 
-    await incrementSponsorCode(sponsorCode);
+    await incrementSponsorCode(sponsor.sponsorCodeRecord);
 
     // Clean up session
     await prisma.pendingSession.delete({ where: { id: sessionId } });
@@ -548,7 +565,7 @@ router.post("/register/telegram/complete", authLimiter, async (req: Request, res
       return;
     }
 
-    // Validate sponsor
+    // Validate sponsor (accepts sponsor code OR wallet address)
     const sponsor = await validateSponsorCode(sponsorCode);
     if (!sponsor.valid) {
       res.status(400).json({ error: sponsor.error });
@@ -566,7 +583,7 @@ router.post("/register/telegram/complete", authLimiter, async (req: Request, res
       },
     });
 
-    await incrementSponsorCode(sponsorCode);
+    await incrementSponsorCode(sponsor.sponsorCodeRecord);
 
     await prisma.pendingSession.delete({ where: { id: sessionId } });
 
@@ -600,10 +617,22 @@ router.post("/login/wallet/challenge", authLimiter, async (req: Request, res: Re
 
     const nonce = crypto.randomBytes(32).toString("hex");
     const message = `Sign this message to authenticate with BitTON.AI\n\nNonce: ${nonce}\nAddress: ${address}\nTimestamp: ${new Date().toISOString()}`;
+    const normalizedAddr = address.toLowerCase();
 
-    challenges.set(address.toLowerCase(), {
-      nonce,
-      expiresAt: Date.now() + 5 * 60 * 1000,
+    // Upsert challenge to DB (production-safe, survives restarts)
+    await prisma.walletChallenge.upsert({
+      where: { address: normalizedAddr },
+      update: {
+        nonce,
+        message,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      },
+      create: {
+        address: normalizedAddr,
+        nonce,
+        message,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      },
     });
 
     res.json({ message, nonce });
@@ -625,8 +654,11 @@ router.post("/login/wallet/verify", authLimiter, async (req: Request, res: Respo
     const { address, signature, message } = parsed.data;
     const normalizedAddr = address.toLowerCase();
 
-    const challenge = challenges.get(normalizedAddr);
-    if (!challenge || challenge.expiresAt < Date.now()) {
+    // Retrieve challenge from DB
+    const challenge = await prisma.walletChallenge.findUnique({
+      where: { address: normalizedAddr },
+    });
+    if (!challenge || challenge.expiresAt < new Date()) {
       res.status(401).json({ error: "Challenge expired or not found. Please try again." });
       return;
     }
@@ -637,7 +669,8 @@ router.post("/login/wallet/verify", authLimiter, async (req: Request, res: Respo
       return;
     }
 
-    challenges.delete(normalizedAddr);
+    // Clean up used challenge
+    await prisma.walletChallenge.delete({ where: { address: normalizedAddr } }).catch(() => {});
 
     const user = await prisma.user.findFirst({ where: { evmAddress: normalizedAddr } });
     if (!user) {

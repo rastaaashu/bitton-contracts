@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -22,8 +22,10 @@ model User {
   email         String?    @unique
   passwordHash  String?    @map("password_hash")
   status        UserStatus @default(PENDING_EMAIL)
+  authMethod    String?    @map("auth_method") // "WALLET", "EMAIL", "TELEGRAM"
   evmAddress    String?    @unique @map("evm_address")
   tonAddress    String?    @unique @map("ton_address")
+  telegramId    String?    @unique @map("telegram_id")
   sponsorId     String?    @map("sponsor_id")
   sponsor       User?      @relation("Sponsorship", fields: [sponsorId], references: [id])
   sponsored     User[]     @relation("Sponsorship")
@@ -176,6 +178,52 @@ enum JobStatus {
   CONFIRMED
   FAILED
   CANCELLED
+}
+
+// ── Pending Sessions (for multi-step auth flows) ──
+model PendingSession {
+  id           String    @id @default(uuid())
+  type         String    // "REGISTER_EMAIL", "LOGIN_EMAIL", "REGISTER_TELEGRAM", "LOGIN_TELEGRAM"
+  email        String?
+  telegramId   String?   @map("telegram_id")
+  telegramData String?   @map("telegram_data")
+  verified     Boolean   @default(false)
+  expiresAt    DateTime  @map("expires_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  otpCodes OtpCode[]
+
+  @@index([expiresAt])
+  @@map("pending_sessions")
+}
+
+// ── OTP Codes ──
+model OtpCode {
+  id        String    @id @default(uuid())
+  sessionId String    @map("session_id")
+  session   PendingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  code      String
+  attempts  Int       @default(0)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([sessionId])
+  @@map("otp_codes")
+}
+
+// ── Wallet Login Challenges (persistent, production-ready) ──
+model WalletChallenge {
+  id        String   @id @default(uuid())
+  address   String   @unique // normalized lowercase
+  nonce     String
+  message   String
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([address])
+  @@index([expiresAt])
+  @@map("wallet_challenges")
 }
 
 // ── Audit Log ──

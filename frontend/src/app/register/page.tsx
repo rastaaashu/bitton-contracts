@@ -65,6 +65,8 @@ function RegisterContent() {
   const [activeTab, setActiveTab] = useState<AuthTab>("wallet");
   const [ready, setReady] = useState(false);
   const [agreed, setAgreed] = useState(false);
+  const [refValid, setRefValid] = useState<boolean | null>(null); // null = checking
+  const [refLabel, setRefLabel] = useState<string>("");
 
   // Wait a tick for localStorage/searchParams to resolve
   useEffect(() => {
@@ -75,6 +77,33 @@ function RegisterContent() {
   useEffect(() => {
     if (!isLoading && isAuthenticated) router.replace("/dashboard");
   }, [isAuthenticated, isLoading, router]);
+
+  // Validate the referral code/address on the backend
+  useEffect(() => {
+    if (!sponsorCode || !ready) return;
+
+    setRefValid(null);
+    fetch(`${API_BASE_URL}/sponsor/validate/${encodeURIComponent(sponsorCode)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.valid) {
+          setRefValid(true);
+          // Show truncated address or code name
+          if (data.type === "wallet") {
+            setRefLabel(`${data.referrer.slice(0, 6)}...${data.referrer.slice(-4)}`);
+          } else {
+            setRefLabel(data.code);
+          }
+        } else {
+          setRefValid(false);
+        }
+      })
+      .catch(() => {
+        // Network error - still allow attempt, backend will validate at registration
+        setRefValid(true);
+        setRefLabel(sponsorCode.length === 42 ? `${sponsorCode.slice(0, 6)}...${sponsorCode.slice(-4)}` : sponsorCode);
+      });
+  }, [sponsorCode, ready]);
 
   // Don't show "Referral Required" until we've had a chance to read localStorage
   if (!ready || isLoading) {
@@ -97,6 +126,28 @@ function RegisterContent() {
     );
   }
 
+  if (refValid === false) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 max-w-md w-full text-center">
+          <h2 className="text-2xl font-bold mb-4 text-red-400">Invalid Referral</h2>
+          <p className="text-gray-400 mb-2">
+            The referral link you used is no longer valid or the referrer account was not found.
+          </p>
+          <p className="text-gray-500 text-sm mb-6">
+            Code: <span className="font-mono text-gray-300">{sponsorCode.length > 20 ? `${sponsorCode.slice(0, 10)}...${sponsorCode.slice(-6)}` : sponsorCode}</span>
+          </p>
+          <p className="text-gray-400 mb-6">
+            Please ask an existing member for a new invite link.
+          </p>
+          <Link href="/login" className="text-brand-400 hover:text-brand-300 underline">
+            Already have an account? Login
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   const tabs: { key: AuthTab; label: string }[] = [
     { key: "wallet", label: "EVM Wallet" },
     { key: "email", label: "Email" },
@@ -109,7 +160,8 @@ function RegisterContent() {
         <h2 className="text-2xl font-bold mb-2 text-center">Create Account</h2>
         <p className="text-gray-400 text-sm text-center mb-1">Register to start using BitTON.AI</p>
         <p className="text-xs text-gray-500 text-center mb-6">
-          Referred by: <span className="text-brand-400">{sponsorCode}</span>
+          Referred by: <span className="text-brand-400">{refLabel || sponsorCode}</span>
+          {refValid === null && <span className="text-gray-600 ml-1">(verifying...)</span>}
         </p>
 
         {/* Tabs */}
@@ -510,7 +562,7 @@ function TelegramRegister({ sponsorCode, agreed }: { sponsorCode: string; agreed
     container.innerHTML = "";
 
     const script = document.createElement("script");
-    script.src = "https://telegram.org/js/telegram-widget.js?22";
+    script.src = "https://telegram.org/js/telegram-widget.js?23";
     script.async = true;
     script.setAttribute("data-telegram-login", botUsername);
     script.setAttribute("data-size", "large");

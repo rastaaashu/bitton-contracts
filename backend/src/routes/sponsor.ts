@@ -57,7 +57,60 @@ router.post("/code/create", jwtAuth, async (req: Request, res: Response) => {
 });
 
 // ──────────────────────────────────────
-// GET /sponsor/code/:code
+// GET /sponsor/validate/:codeOrAddress
+// Accepts either a sponsor code string or an EVM wallet address
+// ──────────────────────────────────────
+router.get("/validate/:codeOrAddress", async (req: Request, res: Response) => {
+  try {
+    const codeOrAddress = req.params.codeOrAddress as string;
+    const isEvmAddress = /^0x[a-fA-F0-9]{40}$/.test(codeOrAddress);
+
+    if (isEvmAddress) {
+      // Validate as wallet address referral
+      const user = await prisma.user.findFirst({
+        where: { evmAddress: codeOrAddress.toLowerCase() },
+      });
+      if (!user || user.status !== "CONFIRMED") {
+        res.status(404).json({ error: "Referrer not found", valid: false });
+        return;
+      }
+      res.json({
+        valid: true,
+        type: "wallet",
+        referrer: codeOrAddress.toLowerCase(),
+      });
+      return;
+    }
+
+    // Validate as sponsor code
+    const sponsorCode = await prisma.sponsorCode.findUnique({
+      where: { code: codeOrAddress },
+    });
+
+    if (!sponsorCode || !sponsorCode.active) {
+      res.status(404).json({ error: "Sponsor code not found or inactive", valid: false });
+      return;
+    }
+
+    const available = sponsorCode.maxUses === 0 || sponsorCode.usedCount < sponsorCode.maxUses;
+
+    res.json({
+      valid: available,
+      type: "code",
+      code: sponsorCode.code,
+      active: sponsorCode.active,
+      maxUses: sponsorCode.maxUses,
+      usedCount: sponsorCode.usedCount,
+      available,
+    });
+  } catch (err: any) {
+    logger.error("Validate sponsor error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ──────────────────────────────────────
+// GET /sponsor/code/:code (legacy, still works)
 // ──────────────────────────────────────
 router.get("/code/:code", async (req: Request, res: Response) => {
   try {
