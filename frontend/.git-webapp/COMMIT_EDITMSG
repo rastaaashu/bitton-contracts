@@ -1,0 +1,14 @@
+Initial commit: BitTON.AI frontend with wallet-based auth
+
+- Next.js 14 + TypeScript + Tailwind + wagmi v2 + RainbowKit
+- Wallet signature required for registration and login
+- Registration: email + password + wallet sign + sponsor code (from ?ref= param)
+- Login: wallet connect + challenge-sign flow
+- Email verification page (/verify-email?token=)
+- AuthContext with JWT access/refresh token management
+- ProtectedRoute guard + conditional LayoutShell
+- Full staking platform UI: dashboard, vault, staking, rewards, vesting, withdraw, referrals, history, admin
+- All contract ABIs and hooks for on-chain interactions
+- Static export for Netlify deployment
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
