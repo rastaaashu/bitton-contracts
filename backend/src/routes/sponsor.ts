@@ -176,7 +176,7 @@ router.post("/bootstrap", adminAuth, async (req: Request, res: Response) => {
         message: "Sponsor code already exists",
         code: existing.code,
         userId: user.id,
-        referralLink: `/?ref=${existing.code}`,
+        referralLink: `/register?ref=${existing.code}`,
       });
       return;
     }
@@ -199,7 +199,7 @@ router.post("/bootstrap", adminAuth, async (req: Request, res: Response) => {
       success: true,
       code: sponsorCode.code,
       userId: user.id,
-      referralLink: `/?ref=${sponsorCode.code}`,
+      referralLink: `/register?ref=${sponsorCode.code}`,
     });
   } catch (err: any) {
     logger.error("Bootstrap error:", err);
