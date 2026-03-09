@@ -42,4 +42,14 @@ router.get("/health", async (_req: Request, res: Response) => {
   }
 });
 
+// Readiness probe — checks only DB (faster than /health)
+router.get("/ready", async (_req: Request, res: Response) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ status: "ready" });
+  } catch (err: any) {
+    res.status(503).json({ status: "not_ready", error: err.message });
+  }
+});
+
 export default router;

@@ -85,6 +85,7 @@ model LoginSession {
   createdAt    DateTime @default(now()) @map("created_at")
 
   @@index([refreshToken])
+  @@index([userId])
   @@map("login_sessions")
 }
 
@@ -195,6 +196,7 @@ model PendingSession {
   otpCodes OtpCode[]
 
   @@index([expiresAt])
+  @@index([email])
   @@map("pending_sessions")
 }
 
@@ -210,6 +212,7 @@ model OtpCode {
   createdAt DateTime  @default(now()) @map("created_at")
 
   @@index([sessionId])
+  @@index([expiresAt])
   @@map("otp_codes")
 }
 

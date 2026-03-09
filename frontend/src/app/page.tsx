@@ -86,7 +86,8 @@ function AuthContent() {
         }
       })
       .catch(() => {
-        setRefValid(true);
+        // Network error — don't assume valid; let backend validate at registration
+        setRefValid(null);
         setRefLabel(
           sponsorCode.length === 42
             ? `${sponsorCode.slice(0, 6)}...${sponsorCode.slice(-4)}`
@@ -334,13 +335,33 @@ function EmailAuth({
   const { signMessageAsync } = useSignMessage();
   const { login } = useAuth();
   const router = useRouter();
-  const [step, setStep] = useState<"email" | "otp" | "wallet">("email");
-  const [email, setEmail] = useState("");
+  // Restore state from sessionStorage on mount (survives page refresh)
+  const [step, setStep] = useState<"email" | "otp" | "wallet">(() => {
+    if (typeof window !== "undefined") {
+      return (sessionStorage.getItem("email_auth_step") as "email" | "otp" | "wallet") || "email";
+    }
+    return "email";
+  });
+  const [email, setEmail] = useState(() =>
+    typeof window !== "undefined" ? sessionStorage.getItem("email_auth_email") || "" : ""
+  );
   const [otp, setOtp] = useState("");
-  const [sessionId, setSessionId] = useState("");
-  const [isNewUser, setIsNewUser] = useState(false);
+  const [sessionId, setSessionId] = useState(() =>
+    typeof window !== "undefined" ? sessionStorage.getItem("email_auth_session") || "" : ""
+  );
+  const [isNewUser, setIsNewUser] = useState(() =>
+    typeof window !== "undefined" ? sessionStorage.getItem("email_auth_new") === "true" : false
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Persist state changes to sessionStorage
+  useEffect(() => {
+    sessionStorage.setItem("email_auth_step", step);
+    sessionStorage.setItem("email_auth_email", email);
+    sessionStorage.setItem("email_auth_session", sessionId);
+    sessionStorage.setItem("email_auth_new", isNewUser ? "true" : "false");
+  }, [step, email, sessionId, isNewUser]);
 
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -448,6 +469,10 @@ function EmailAuth({
       if (data.isNewUser) {
         localStorage.removeItem(REF_STORAGE_KEY);
       }
+      // Clear email auth session state
+      ["email_auth_step", "email_auth_email", "email_auth_session", "email_auth_new"].forEach(
+        (k) => sessionStorage.removeItem(k)
+      );
       login(data.accessToken, data.refreshToken, data.user);
       router.replace("/dashboard");
     } catch (err: any) {

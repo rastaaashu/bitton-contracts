@@ -113,10 +113,16 @@ async function validateSponsorCode(codeOrAddress: string): Promise<{ valid: bool
 
 async function incrementSponsorCode(code: string | undefined): Promise<void> {
   if (!code) return; // No sponsor code to increment (was a wallet address referral)
-  await prisma.sponsorCode.update({
-    where: { code },
-    data: { usedCount: { increment: 1 } },
-  });
+  // Atomic increment with limit check to prevent race condition
+  const result = await prisma.$executeRaw`
+    UPDATE sponsor_codes
+    SET used_count = used_count + 1
+    WHERE code = ${code}
+    AND (max_uses = 0 OR used_count < max_uses)
+  `;
+  if (result === 0) {
+    logger.warn(`Sponsor code ${code} increment failed (limit reached or not found)`);
+  }
 }
 
 async function createSession(userId: string, req: Request): Promise<{ accessToken: string; refreshToken: string }> {
@@ -351,6 +357,10 @@ router.post("/verify-otp", authLimiter, async (req: Request, res: Response) => {
         where: { id: latestOtp.id },
         data: { attempts: { increment: 1 } },
       });
+      logger.warn(`Failed OTP attempt for session ${sessionId} (attempt ${latestOtp.attempts + 1}/${OTP_MAX_ATTEMPTS})`);
+      await prisma.auditLog.create({
+        data: { actor: session.email || `session:${sessionId}`, action: "auth.otp.failed", target: sessionId },
+      }).catch(() => {});
       res.status(400).json({ error: "Invalid verification code" });
       return;
     }
@@ -378,8 +388,8 @@ router.post("/verify-otp", authLimiter, async (req: Request, res: Response) => {
 // ════════════════════════════════════════
 router.post("/resend-otp", otpLimiter, async (req: Request, res: Response) => {
   try {
-    const { sessionId } = req.body;
-    if (!sessionId) {
+    const sessionId = req.body?.sessionId;
+    if (!sessionId || typeof sessionId !== "string") {
       res.status(400).json({ error: "Session ID is required" });
       return;
     }
@@ -704,7 +714,8 @@ router.post("/login/wallet/challenge", authLimiter, async (req: Request, res: Re
 
     res.json({ message, nonce });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    logger.error("Wallet challenge error:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 

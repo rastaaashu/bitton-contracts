@@ -5,7 +5,7 @@ services:
     region: ohio
     plan: free
     rootDir: backend
-    buildCommand: npm install && npx prisma generate && npm run build
+    buildCommand: npm install && npx prisma generate && npx prisma db push --skip-generate && npm run build
     startCommand: npm run start
     healthCheckPath: /health
     envVars:
@@ -20,9 +20,9 @@ services:
       - key: RELAYER_PRIVATE_KEY
         sync: false
       - key: BTN_TOKEN_ADDRESS
-        value: "0xa874ae78f2A9f3EE6551ebdAf32f5B3bcF0a575D"
+        value: "0x5b964baafEDf002e5364F37848DCa1908D3e4e9f"
       - key: USDT_TOKEN_ADDRESS
-        value: "0x1f15CdaACC32D6cA77FaaC8B080a3f2C0F597316"
+        value: "0x69Bc9E30366888385f68cBB566EEb655CD5A34CC"
       - key: CUSTODIAL_ADDRESS
         value: "0x71dB030B792E9D4CfdCC7e452e0Ff55CdB5A4D99"
       - key: VAULT_MANAGER_ADDRESS
@@ -49,5 +49,11 @@ services:
         sync: false
       - key: EMAIL_API_PROVIDER
         value: resend
-      - key: APP_URL
+      - key: SMTP_FROM
+        value: "noreply@bitton.ai"
+      - key: TELEGRAM_BOT_TOKEN
         sync: false
+      - key: TELEGRAM_BOT_USERNAME
+        value: bitton_auth_bot
+      - key: APP_URL
+        value: "https://bitton-contracts.vercel.app"
