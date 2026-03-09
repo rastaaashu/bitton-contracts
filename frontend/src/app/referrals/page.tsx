@@ -61,7 +61,7 @@ function ReferralsContent() {
   }, [refFromUrl, referrerInput]);
 
   const referralLink = address
-    ? `${typeof window !== "undefined" ? window.location.origin : ""}/register?ref=${address}`
+    ? `${typeof window !== "undefined" ? window.location.origin : ""}/?ref=${address}`
     : "";
 
   const handleCopy = () => {

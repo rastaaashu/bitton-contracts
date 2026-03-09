@@ -17,6 +17,7 @@ interface AuthUser {
   evmAddress: string | null;
   telegramId?: string | null;
   authMethod?: string;
+  createdAt?: string;
 }
 
 interface AuthContextType {

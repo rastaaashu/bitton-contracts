@@ -29,10 +29,17 @@ async function sendViaHttpApi(
 ): Promise<string> {
   const provider = env.emailApiProvider;
   const apiKey = env.emailApiKey;
-  // Use Resend's free onboarding domain if custom domain not verified
-  const from = env.smtpFrom.includes("@bitton.ai") && provider === "resend"
-    ? "BitTON.AI <onboarding@resend.dev>"
-    : env.smtpFrom;
+  // Use Resend's free onboarding domain unless SMTP_FROM looks like a verified domain
+  // On Resend free plan, you MUST use onboarding@resend.dev as the from address
+  let from = env.smtpFrom;
+  if (provider === "resend") {
+    // Only use custom from if it's explicitly set to a non-default value that doesn't contain bitton.ai
+    // (bitton.ai domain needs to be verified on Resend first)
+    const isDefaultOrUnverified = !from || from === "noreply@bitton.ai" || from.includes("@bitton.ai");
+    if (isDefaultOrUnverified) {
+      from = "BitTON.AI <onboarding@resend.dev>";
+    }
+  }
 
   if (provider === "resend") {
     const res = await fetch("https://api.resend.com/emails", {
@@ -83,9 +90,16 @@ async function sendEmail(
 ): Promise<void> {
   // Priority 1: HTTP email API (works on all platforms)
   if (env.emailApiKey) {
-    const id = await sendViaHttpApi(to, subject, text, html);
-    logger.info(`Email sent to ${to} via ${env.emailApiProvider} API, id=${id}`);
-    return;
+    try {
+      const id = await sendViaHttpApi(to, subject, text, html);
+      logger.info(`Email sent to ${to} via ${env.emailApiProvider} API, id=${id}`);
+      return;
+    } catch (apiErr: any) {
+      logger.error(`Email API (${env.emailApiProvider}) failed for ${to}: ${apiErr.message}`);
+      // Fall through to SMTP if available
+      if (!getSmtpTransporter()) throw apiErr;
+      logger.info("Falling back to SMTP...");
+    }
   }
 
   // Priority 2: SMTP (works locally, blocked on some hosts)
@@ -99,6 +113,7 @@ async function sendEmail(
   }
 
   // Priority 3: Dev console fallback
+  logger.warn(`[DEV EMAIL] No email provider configured! Email NOT actually sent.`);
   logger.info(`[DEV EMAIL] To: ${to} | Subject: ${subject}`);
   logger.info(`[DEV EMAIL] Body: ${text}`);
 }

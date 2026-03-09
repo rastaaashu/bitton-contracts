@@ -5,7 +5,7 @@ import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 
-const PUBLIC_ROUTES = ["/login", "/register", "/verify-email"];
+const PUBLIC_ROUTES = ["/", "/login", "/register", "/verify-email"];
 
 export function LayoutShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

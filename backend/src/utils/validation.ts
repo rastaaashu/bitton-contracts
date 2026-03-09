@@ -86,6 +86,53 @@ export const loginTelegramInitSchema = z.object({
   hash: z.string().min(1, "Hash is required"),
 });
 
+// ── Unified auth (auto-detect login/register) ──
+export const unifiedWalletCompleteSchema = z.object({
+  address: evmAddress,
+  signature: z.string().min(1, "Signature is required"),
+  message: z.string().min(1, "Message is required"),
+  sponsorCode: z.string().optional(),
+});
+
+export const unifiedEmailInitSchema = z.object({
+  email: z.string().email("Invalid email address"),
+});
+
+export const unifiedEmailCompleteSchema = z.object({
+  sessionId: z.string().uuid("Invalid session ID"),
+  address: evmAddress,
+  signature: z.string().min(1, "Signature is required"),
+  message: z.string().min(1, "Message is required"),
+  sponsorCode: z.string().optional(),
+});
+
+export const unifiedTelegramCompleteSchema = z.object({
+  sessionId: z.string().uuid("Invalid session ID"),
+  address: evmAddress,
+  signature: z.string().min(1, "Signature is required"),
+  message: z.string().min(1, "Message is required"),
+  sponsorCode: z.string().optional(),
+});
+
+export const linkEmailInitSchema = z.object({
+  email: z.string().email("Invalid email address"),
+});
+
+export const linkEmailVerifySchema = z.object({
+  sessionId: z.string().uuid("Invalid session ID"),
+  otp: z.string().length(6, "OTP must be 6 digits").regex(/^\d{6}$/, "OTP must be numeric"),
+});
+
+export const linkTelegramSchema = z.object({
+  id: z.number().int(),
+  first_name: z.string().optional(),
+  last_name: z.string().optional(),
+  username: z.string().optional(),
+  photo_url: z.string().optional(),
+  auth_date: z.number().int(),
+  hash: z.string().min(1, "Hash is required"),
+});
+
 // ── Sponsor codes (admin) ──
 export const createSponsorCodeSchema = z.object({
   code: z.string().min(3).max(32).regex(/^[a-zA-Z0-9_-]+$/, "Code must be alphanumeric with dashes/underscores"),

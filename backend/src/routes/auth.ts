@@ -18,6 +18,13 @@ import {
   loginEmailInitSchema,
   loginCompleteSchema,
   loginTelegramInitSchema,
+  unifiedWalletCompleteSchema,
+  unifiedEmailInitSchema,
+  unifiedEmailCompleteSchema,
+  unifiedTelegramCompleteSchema,
+  linkEmailInitSchema,
+  linkEmailVerifySchema,
+  linkTelegramSchema,
 } from "../utils/validation";
 import rateLimit from "express-rate-limit";
 
@@ -153,6 +160,7 @@ function userResponse(user: any) {
     evmAddress: user.evmAddress,
     telegramId: user.telegramId,
     authMethod: user.authMethod,
+    createdAt: user.createdAt,
   };
 }
 
@@ -992,6 +1000,672 @@ router.post("/login/telegram/complete", authLimiter, async (req: Request, res: R
     });
   } catch (err: any) {
     logger.error("Login telegram complete error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ════════════════════════════════════════
+// UNIFIED: WALLET (auto-detect login/register)
+// Uses the existing /login/wallet/challenge for step 1
+// ════════════════════════════════════════
+router.post("/wallet/complete", authLimiter, async (req: Request, res: Response) => {
+  try {
+    const parsed = unifiedWalletCompleteSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.errors[0].message });
+      return;
+    }
+    const { address, signature, message, sponsorCode } = parsed.data;
+    const normalizedAddr = address.toLowerCase();
+
+    // Verify the challenge exists and matches
+    const challenge = await prisma.walletChallenge.findUnique({
+      where: { address: normalizedAddr },
+    });
+    if (!challenge || challenge.expiresAt < new Date()) {
+      res.status(401).json({ error: "Challenge expired or not found. Please try again." });
+      return;
+    }
+    if (message !== challenge.message) {
+      res.status(401).json({ error: "Message does not match the issued challenge" });
+      return;
+    }
+
+    // Verify signature
+    const recovered = ethers.verifyMessage(message, signature);
+    if (recovered.toLowerCase() !== normalizedAddr) {
+      res.status(401).json({ error: "Signature verification failed" });
+      return;
+    }
+
+    // Clean up challenge
+    await prisma.walletChallenge.delete({ where: { address: normalizedAddr } }).catch(() => {});
+
+    // Check if user exists
+    const existingUser = await prisma.user.findFirst({ where: { evmAddress: normalizedAddr } });
+
+    if (existingUser) {
+      // ── LOGIN ──
+      if (existingUser.status !== "CONFIRMED") {
+        res.status(403).json({ error: `Account not confirmed. Current status: ${existingUser.status}` });
+        return;
+      }
+      const tokens = await createSession(existingUser.id, req);
+      await prisma.auditLog.create({
+        data: { actor: normalizedAddr, action: "auth.unified.wallet.login", target: existingUser.id },
+      });
+      res.json({ ...tokens, user: userResponse(existingUser), isNewUser: false });
+    } else {
+      // ── REGISTER ──
+      if (!sponsorCode) {
+        res.status(400).json({ error: "NEEDS_SPONSOR", message: "Referral code is required for new accounts" });
+        return;
+      }
+
+      const sponsor = await validateSponsorCode(sponsorCode);
+      if (!sponsor.valid) {
+        res.status(400).json({ error: sponsor.error });
+        return;
+      }
+
+      let user;
+      try {
+        user = await prisma.user.create({
+          data: {
+            evmAddress: normalizedAddr,
+            authMethod: "WALLET",
+            status: "CONFIRMED",
+            sponsorId: sponsor.sponsorId,
+          },
+        });
+      } catch (createErr: any) {
+        if (isPrismaUniqueError(createErr)) {
+          res.status(409).json({ error: "Wallet or identity already registered" });
+          return;
+        }
+        throw createErr;
+      }
+
+      await incrementSponsorCode(sponsor.sponsorCodeRecord);
+      await autoCreateSponsorCode(user.id);
+      const tokens = await createSession(user.id, req);
+
+      await prisma.auditLog.create({
+        data: { actor: normalizedAddr, action: "auth.unified.wallet.register", target: user.id },
+      });
+
+      res.status(201).json({ ...tokens, user: userResponse(user), isNewUser: true });
+    }
+  } catch (err: any) {
+    logger.error("Unified wallet complete error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ════════════════════════════════════════
+// UNIFIED: EMAIL - init (auto-detect login/register)
+// ════════════════════════════════════════
+router.post("/email/init", otpLimiter, async (req: Request, res: Response) => {
+  try {
+    const parsed = unifiedEmailInitSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.errors[0].message });
+      return;
+    }
+    const email = parsed.data.email.toLowerCase();
+
+    // Auto-detect: does user exist?
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    const sessionType = existingUser ? "LOGIN_EMAIL" : "REGISTER_EMAIL";
+
+    const session = await prisma.pendingSession.create({
+      data: {
+        type: sessionType,
+        email,
+        expiresAt: new Date(Date.now() + SESSION_EXPIRY_MS),
+      },
+    });
+
+    const otp = generateOtp();
+    await prisma.otpCode.create({
+      data: {
+        sessionId: session.id,
+        code: otp,
+        expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+      },
+    });
+
+    try {
+      await sendOtpEmail(email, otp);
+    } catch (emailErr: any) {
+      logger.error("Failed to send OTP email:", emailErr.message);
+    }
+
+    await prisma.auditLog.create({
+      data: { actor: email, action: `auth.unified.email.init.${sessionType}`, target: session.id },
+    });
+
+    res.json({
+      sessionId: session.id,
+      isNewUser: !existingUser,
+      message: "Verification code sent to your email",
+    });
+  } catch (err: any) {
+    logger.error("Unified email init error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ════════════════════════════════════════
+// UNIFIED: EMAIL - complete (auto-detect login/register)
+// ════════════════════════════════════════
+router.post("/email/complete", authLimiter, async (req: Request, res: Response) => {
+  try {
+    const parsed = unifiedEmailCompleteSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.errors[0].message });
+      return;
+    }
+    const { sessionId, address, signature, message, sponsorCode } = parsed.data;
+    const normalizedAddr = address.toLowerCase();
+
+    const session = await prisma.pendingSession.findUnique({ where: { id: sessionId } });
+    if (!session || session.expiresAt < new Date()) {
+      res.status(400).json({ error: "Session expired. Please start over." });
+      return;
+    }
+    if (!session.verified) {
+      res.status(400).json({ error: "Email not verified. Please verify your OTP first." });
+      return;
+    }
+    if (session.type !== "LOGIN_EMAIL" && session.type !== "REGISTER_EMAIL") {
+      res.status(400).json({ error: "Invalid session type" });
+      return;
+    }
+
+    // Verify wallet signature
+    const recovered = ethers.verifyMessage(message, signature);
+    if (recovered.toLowerCase() !== normalizedAddr) {
+      res.status(401).json({ error: "Wallet signature verification failed" });
+      return;
+    }
+
+    if (session.type === "LOGIN_EMAIL") {
+      // ── LOGIN ──
+      const user = await prisma.user.findUnique({ where: { email: session.email! } });
+      if (!user) {
+        res.status(404).json({ error: "Account not found" });
+        return;
+      }
+      if (user.evmAddress && user.evmAddress !== normalizedAddr) {
+        res.status(403).json({ error: "Wallet does not match the registered wallet for this account" });
+        return;
+      }
+      if (user.status !== "CONFIRMED") {
+        res.status(403).json({ error: `Account not confirmed. Current status: ${user.status}` });
+        return;
+      }
+
+      await prisma.pendingSession.delete({ where: { id: sessionId } }).catch(() => {});
+      const tokens = await createSession(user.id, req);
+
+      await prisma.auditLog.create({
+        data: { actor: session.email!, action: "auth.unified.email.login", target: user.id },
+      });
+
+      res.json({ ...tokens, user: userResponse(user), isNewUser: false });
+    } else {
+      // ── REGISTER ──
+      if (!sponsorCode) {
+        res.status(400).json({ error: "NEEDS_SPONSOR", message: "Referral code is required for new accounts" });
+        return;
+      }
+
+      // Check duplicates
+      const existingEmail = await prisma.user.findUnique({ where: { email: session.email! } });
+      if (existingEmail) {
+        res.status(409).json({ error: "Email already registered" });
+        return;
+      }
+      const existingWallet = await prisma.user.findFirst({ where: { evmAddress: normalizedAddr } });
+      if (existingWallet) {
+        res.status(409).json({ error: "Wallet already registered to another account" });
+        return;
+      }
+
+      const sponsor = await validateSponsorCode(sponsorCode);
+      if (!sponsor.valid) {
+        res.status(400).json({ error: sponsor.error });
+        return;
+      }
+
+      let user;
+      try {
+        user = await prisma.user.create({
+          data: {
+            email: session.email!,
+            evmAddress: normalizedAddr,
+            authMethod: "EMAIL",
+            status: "CONFIRMED",
+            emailVerifiedAt: new Date(),
+            sponsorId: sponsor.sponsorId,
+          },
+        });
+      } catch (createErr: any) {
+        if (isPrismaUniqueError(createErr)) {
+          res.status(409).json({ error: "Email or wallet already registered" });
+          return;
+        }
+        throw createErr;
+      }
+
+      await incrementSponsorCode(sponsor.sponsorCodeRecord);
+      await autoCreateSponsorCode(user.id);
+      await prisma.pendingSession.delete({ where: { id: sessionId } }).catch(() => {});
+      const tokens = await createSession(user.id, req);
+
+      await prisma.auditLog.create({
+        data: { actor: session.email!, action: "auth.unified.email.register", target: user.id },
+      });
+
+      res.status(201).json({ ...tokens, user: userResponse(user), isNewUser: true });
+    }
+  } catch (err: any) {
+    logger.error("Unified email complete error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ════════════════════════════════════════
+// UNIFIED: TELEGRAM - init (auto-detect login/register)
+// ════════════════════════════════════════
+router.post("/telegram/init", authLimiter, async (req: Request, res: Response) => {
+  try {
+    const parsed = loginTelegramInitSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.errors[0].message });
+      return;
+    }
+
+    const telegramData = parsed.data as TelegramLoginData;
+
+    if (!verifyTelegramAuth(telegramData)) {
+      res.status(401).json({ error: "Telegram authentication failed. Ensure TELEGRAM_BOT_TOKEN is configured correctly." });
+      return;
+    }
+
+    const telegramId = telegramData.id.toString();
+    const existingUser = await prisma.user.findFirst({ where: { telegramId } });
+
+    const sessionType = existingUser ? "LOGIN_TELEGRAM" : "REGISTER_TELEGRAM";
+
+    const session = await prisma.pendingSession.create({
+      data: {
+        type: sessionType,
+        telegramId,
+        telegramData: JSON.stringify(telegramData),
+        verified: true,
+        expiresAt: new Date(Date.now() + SESSION_EXPIRY_MS),
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: { actor: `tg:${telegramId}`, action: `auth.unified.telegram.init.${sessionType}`, target: session.id },
+    });
+
+    res.json({
+      sessionId: session.id,
+      isNewUser: !existingUser,
+      telegramUser: {
+        id: telegramData.id,
+        firstName: telegramData.first_name,
+        username: telegramData.username,
+      },
+      message: "Telegram verified. Please connect your wallet to continue.",
+    });
+  } catch (err: any) {
+    logger.error("Unified telegram init error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ════════════════════════════════════════
+// UNIFIED: TELEGRAM - complete (auto-detect login/register)
+// ════════════════════════════════════════
+router.post("/telegram/complete", authLimiter, async (req: Request, res: Response) => {
+  try {
+    const parsed = unifiedTelegramCompleteSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.errors[0].message });
+      return;
+    }
+    const { sessionId, address, signature, message, sponsorCode } = parsed.data;
+    const normalizedAddr = address.toLowerCase();
+
+    const session = await prisma.pendingSession.findUnique({ where: { id: sessionId } });
+    if (!session || session.expiresAt < new Date()) {
+      res.status(400).json({ error: "Session expired. Please start over." });
+      return;
+    }
+    if (!session.verified) {
+      res.status(400).json({ error: "Invalid session" });
+      return;
+    }
+    if (session.type !== "LOGIN_TELEGRAM" && session.type !== "REGISTER_TELEGRAM") {
+      res.status(400).json({ error: "Invalid session type" });
+      return;
+    }
+
+    // Verify wallet signature
+    const recovered = ethers.verifyMessage(message, signature);
+    if (recovered.toLowerCase() !== normalizedAddr) {
+      res.status(401).json({ error: "Wallet signature verification failed" });
+      return;
+    }
+
+    if (session.type === "LOGIN_TELEGRAM") {
+      // ── LOGIN ──
+      const user = await prisma.user.findFirst({ where: { telegramId: session.telegramId! } });
+      if (!user) {
+        res.status(404).json({ error: "Account not found" });
+        return;
+      }
+      if (user.evmAddress && user.evmAddress !== normalizedAddr) {
+        res.status(403).json({ error: "Wallet does not match the registered wallet for this account" });
+        return;
+      }
+      if (user.status !== "CONFIRMED") {
+        res.status(403).json({ error: `Account not confirmed. Current status: ${user.status}` });
+        return;
+      }
+
+      await prisma.pendingSession.delete({ where: { id: sessionId } }).catch(() => {});
+      const tokens = await createSession(user.id, req);
+
+      await prisma.auditLog.create({
+        data: { actor: `tg:${session.telegramId}`, action: "auth.unified.telegram.login", target: user.id },
+      });
+
+      res.json({ ...tokens, user: userResponse(user), isNewUser: false });
+    } else {
+      // ── REGISTER ──
+      if (!sponsorCode) {
+        res.status(400).json({ error: "NEEDS_SPONSOR", message: "Referral code is required for new accounts" });
+        return;
+      }
+
+      // Check duplicates
+      const existingTelegram = await prisma.user.findFirst({ where: { telegramId: session.telegramId! } });
+      if (existingTelegram) {
+        res.status(409).json({ error: "Telegram account already registered" });
+        return;
+      }
+      const existingWallet = await prisma.user.findFirst({ where: { evmAddress: normalizedAddr } });
+      if (existingWallet) {
+        res.status(409).json({ error: "Wallet already registered to another account" });
+        return;
+      }
+
+      const sponsor = await validateSponsorCode(sponsorCode);
+      if (!sponsor.valid) {
+        res.status(400).json({ error: sponsor.error });
+        return;
+      }
+
+      let user;
+      try {
+        user = await prisma.user.create({
+          data: {
+            telegramId: session.telegramId!,
+            evmAddress: normalizedAddr,
+            authMethod: "TELEGRAM",
+            status: "CONFIRMED",
+            sponsorId: sponsor.sponsorId,
+          },
+        });
+      } catch (createErr: any) {
+        if (isPrismaUniqueError(createErr)) {
+          res.status(409).json({ error: "Telegram account or wallet already registered" });
+          return;
+        }
+        throw createErr;
+      }
+
+      await incrementSponsorCode(sponsor.sponsorCodeRecord);
+      await autoCreateSponsorCode(user.id);
+      await prisma.pendingSession.delete({ where: { id: sessionId } }).catch(() => {});
+      const tokens = await createSession(user.id, req);
+
+      await prisma.auditLog.create({
+        data: { actor: `tg:${session.telegramId}`, action: "auth.unified.telegram.register", target: user.id },
+      });
+
+      res.status(201).json({ ...tokens, user: userResponse(user), isNewUser: true });
+    }
+  } catch (err: any) {
+    logger.error("Unified telegram complete error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ════════════════════════════════════════
+// PROFILE: Get user profile
+// ════════════════════════════════════════
+router.get("/profile", jwtAuth, async (req: Request, res: Response) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.userId },
+      include: {
+        sponsorCodes: { where: { active: true }, select: { code: true, usedCount: true, maxUses: true } },
+        sponsor: { select: { id: true, evmAddress: true, email: true } },
+      },
+    });
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    res.json({
+      id: user.id,
+      email: user.email,
+      evmAddress: user.evmAddress,
+      telegramId: user.telegramId,
+      authMethod: user.authMethod,
+      status: user.status,
+      emailVerifiedAt: user.emailVerifiedAt,
+      createdAt: user.createdAt,
+      lastLoginAt: user.lastLoginAt,
+      sponsorCodes: user.sponsorCodes,
+      sponsor: user.sponsor ? {
+        evmAddress: user.sponsor.evmAddress,
+        email: user.sponsor.email,
+      } : null,
+    });
+  } catch (err: any) {
+    logger.error("Get profile error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ════════════════════════════════════════
+// PROFILE: Link email to existing account
+// ════════════════════════════════════════
+router.post("/profile/link-email/init", jwtAuth, otpLimiter, async (req: Request, res: Response) => {
+  try {
+    const parsed = linkEmailInitSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.errors[0].message });
+      return;
+    }
+    const email = parsed.data.email.toLowerCase();
+
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    if (user.email) {
+      res.status(409).json({ error: "Account already has an email linked" });
+      return;
+    }
+
+    // Check if email is taken
+    const emailTaken = await prisma.user.findUnique({ where: { email } });
+    if (emailTaken) {
+      res.status(409).json({ error: "Email already used by another account" });
+      return;
+    }
+
+    const session = await prisma.pendingSession.create({
+      data: {
+        type: "LINK_EMAIL",
+        email,
+        expiresAt: new Date(Date.now() + SESSION_EXPIRY_MS),
+      },
+    });
+
+    const otp = generateOtp();
+    await prisma.otpCode.create({
+      data: {
+        sessionId: session.id,
+        code: otp,
+        expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+      },
+    });
+
+    try {
+      await sendOtpEmail(email, otp);
+    } catch (emailErr: any) {
+      logger.error("Failed to send link-email OTP:", emailErr.message);
+    }
+
+    res.json({ sessionId: session.id, message: "Verification code sent to your email" });
+  } catch (err: any) {
+    logger.error("Link email init error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.post("/profile/link-email/verify", jwtAuth, authLimiter, async (req: Request, res: Response) => {
+  try {
+    const parsed = linkEmailVerifySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.errors[0].message });
+      return;
+    }
+    const { sessionId, otp } = parsed.data;
+
+    const session = await prisma.pendingSession.findUnique({
+      where: { id: sessionId },
+      include: { otpCodes: { orderBy: { createdAt: "desc" }, take: 1 } },
+    });
+
+    if (!session || session.expiresAt < new Date() || session.type !== "LINK_EMAIL") {
+      res.status(400).json({ error: "Session expired or invalid. Please start over." });
+      return;
+    }
+
+    const latestOtp = session.otpCodes[0];
+    if (!latestOtp || latestOtp.usedAt || latestOtp.expiresAt < new Date()) {
+      res.status(400).json({ error: "OTP expired. Request a new one." });
+      return;
+    }
+    if (latestOtp.attempts >= OTP_MAX_ATTEMPTS) {
+      res.status(429).json({ error: "Too many failed attempts. Request a new OTP." });
+      return;
+    }
+    if (latestOtp.code !== otp) {
+      await prisma.otpCode.update({ where: { id: latestOtp.id }, data: { attempts: { increment: 1 } } });
+      res.status(400).json({ error: "Invalid verification code" });
+      return;
+    }
+
+    // OTP correct — link email
+    await prisma.otpCode.update({ where: { id: latestOtp.id }, data: { usedAt: new Date() } });
+
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    if (user.email) {
+      res.status(409).json({ error: "Account already has an email linked" });
+      return;
+    }
+
+    // Double check email not taken
+    const emailTaken = await prisma.user.findUnique({ where: { email: session.email! } });
+    if (emailTaken) {
+      res.status(409).json({ error: "Email already used by another account" });
+      return;
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { email: session.email!, emailVerifiedAt: new Date() },
+    });
+
+    await prisma.pendingSession.delete({ where: { id: sessionId } }).catch(() => {});
+
+    await prisma.auditLog.create({
+      data: { actor: user.id, action: "auth.profile.link_email", target: session.email! },
+    });
+
+    res.json({ success: true, email: session.email!, message: "Email linked successfully" });
+  } catch (err: any) {
+    logger.error("Link email verify error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ════════════════════════════════════════
+// PROFILE: Link Telegram to existing account
+// ════════════════════════════════════════
+router.post("/profile/link-telegram", jwtAuth, authLimiter, async (req: Request, res: Response) => {
+  try {
+    const parsed = linkTelegramSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.errors[0].message });
+      return;
+    }
+
+    const telegramData = parsed.data as TelegramLoginData;
+
+    if (!verifyTelegramAuth(telegramData)) {
+      res.status(401).json({ error: "Telegram authentication failed" });
+      return;
+    }
+
+    const telegramId = telegramData.id.toString();
+
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    if (user.telegramId) {
+      res.status(409).json({ error: "Account already has Telegram linked" });
+      return;
+    }
+
+    // Check if telegram ID is taken
+    const tgTaken = await prisma.user.findFirst({ where: { telegramId } });
+    if (tgTaken) {
+      res.status(409).json({ error: "Telegram account already used by another user" });
+      return;
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { telegramId },
+    });
+
+    await prisma.auditLog.create({
+      data: { actor: user.id, action: "auth.profile.link_telegram", target: `tg:${telegramId}` },
+    });
+
+    res.json({ success: true, telegramId, message: "Telegram linked successfully" });
+  } catch (err: any) {
+    logger.error("Link telegram error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
