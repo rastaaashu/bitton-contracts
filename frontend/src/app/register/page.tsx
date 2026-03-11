@@ -112,21 +112,6 @@ function RegisterContent() {
           Register to start using BitTON.AI
         </p>
 
-        {/* Risk Disclaimer — FIRST, above everything */}
-        <div className="mb-6 p-3 border border-gray-700 rounded-lg bg-gray-800/50">
-          <label className="flex items-start gap-3 cursor-pointer group">
-            <input
-              type="checkbox"
-              checked={agreed}
-              onChange={(e) => setAgreed(e.target.checked)}
-              className="mt-1 w-4 h-4 rounded border-gray-600 bg-gray-800 text-brand-600 focus:ring-brand-500 flex-shrink-0"
-            />
-            <span className="text-xs text-gray-400 leading-relaxed group-hover:text-gray-300">
-              <strong className="text-gray-300">Risk Disclaimer:</strong> Digital assets and blockchain-based products involve significant risk and may result in the loss of all invested funds. Past performance does not guarantee future results. BitTON.AI does not provide financial, investment, or legal advice. Users are solely responsible for their decisions and should carefully evaluate all risks before participating.
-            </span>
-          </label>
-        </div>
-
         {/* Referral Code Input */}
         <div className={`mb-6 ${!agreed ? "opacity-40 pointer-events-none" : ""}`}>
           <label className="block text-xs text-gray-500 mb-1.5">
@@ -200,7 +185,22 @@ function RegisterContent() {
           )}
         </div>
 
-        <p className="text-center text-sm text-gray-500 mt-6">
+        {/* Risk Disclaimer — at bottom */}
+        <div className="mt-6 border-t border-gray-700 pt-4">
+          <label className="flex items-start gap-3 cursor-pointer group">
+            <input
+              type="checkbox"
+              checked={agreed}
+              onChange={(e) => setAgreed(e.target.checked)}
+              className="mt-1 w-4 h-4 rounded border-gray-600 bg-gray-800 text-brand-600 focus:ring-brand-500 flex-shrink-0"
+            />
+            <span className="text-xs text-gray-400 leading-relaxed group-hover:text-gray-300">
+              <strong className="text-gray-300">Risk Disclaimer:</strong> Digital assets and blockchain-based products involve significant risk and may result in the loss of all invested funds. Past performance does not guarantee future results. BitTON.AI does not provide financial, investment, or legal advice. Users are solely responsible for their decisions and should carefully evaluate all risks before participating.
+            </span>
+          </label>
+        </div>
+
+        <p className="text-center text-sm text-gray-500 mt-4">
           Already have an account?{" "}
           <Link href="/login" className="text-brand-400 hover:text-brand-300 underline">
             Login
