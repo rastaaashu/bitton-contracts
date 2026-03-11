@@ -35,29 +35,8 @@ export default function LoginPage() {
           Sign in to your account
         </p>
 
-        {/* Tabs */}
-        <div className="flex border-b border-gray-700 mb-6">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
-                activeTab === tab.key
-                  ? "text-brand-400 border-b-2 border-brand-400"
-                  : "text-gray-500 hover:text-gray-300"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {activeTab === "wallet" && <WalletLogin agreed={agreed} />}
-        {activeTab === "email" && <EmailLogin agreed={agreed} />}
-        {activeTab === "telegram" && <TelegramLogin agreed={agreed} />}
-
-        {/* Risk Disclaimer */}
-        <div className="mt-6 border-t border-gray-700 pt-4">
+        {/* Risk Disclaimer — FIRST, above everything */}
+        <div className="mb-6 p-3 border border-gray-700 rounded-lg bg-gray-800/50">
           <label className="flex items-start gap-3 cursor-pointer group">
             <input
               type="checkbox"
@@ -71,7 +50,32 @@ export default function LoginPage() {
           </label>
         </div>
 
-        <p className="text-center text-sm text-gray-500 mt-4">
+        {/* Tabs */}
+        <div className={`flex border-b border-gray-700 mb-6 ${!agreed ? "opacity-50 pointer-events-none" : ""}`}>
+          {tabs.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              disabled={!agreed}
+              className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
+                activeTab === tab.key
+                  ? "text-brand-400 border-b-2 border-brand-400"
+                  : "text-gray-500 hover:text-gray-300"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Auth forms — all disabled until agreed */}
+        <div className={!agreed ? "opacity-40 pointer-events-none select-none" : ""}>
+          {activeTab === "wallet" && <WalletLogin agreed={agreed} />}
+          {activeTab === "email" && <EmailLogin agreed={agreed} />}
+          {activeTab === "telegram" && <TelegramLogin agreed={agreed} />}
+        </div>
+
+        <p className="text-center text-sm text-gray-500 mt-6">
           Don&apos;t have an account?{" "}
           <Link href="/register" className="text-brand-400 hover:text-brand-300 underline">
             Register
@@ -99,7 +103,6 @@ function WalletLogin({ agreed }: { agreed: boolean }) {
     setError("");
 
     try {
-      // Step 1: Get challenge
       const challengeRes = await fetch(
         `${API_BASE_URL}/auth/login/wallet/challenge`,
         {
@@ -114,12 +117,10 @@ function WalletLogin({ agreed }: { agreed: boolean }) {
         return;
       }
 
-      // Step 2: Sign
       const signature = await signMessageAsync({
         message: challengeData.message,
       });
 
-      // Step 3: Verify
       const res = await fetch(`${API_BASE_URL}/auth/login/wallet/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -163,7 +164,7 @@ function WalletLogin({ agreed }: { agreed: boolean }) {
         <button
           onClick={handleSign}
           disabled={loading || !agreed}
-          className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white py-2.5 rounded-lg font-medium transition-colors"
+          className="w-full bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white py-3 rounded-lg font-medium transition-colors"
         >
           {loading ? "Signing in..." : "Sign & Login"}
         </button>
@@ -191,6 +192,7 @@ function EmailLogin({ agreed }: { agreed: boolean }) {
 
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!agreed) return;
     setLoading(true);
     setError("");
 
@@ -261,7 +263,7 @@ function EmailLogin({ agreed }: { agreed: boolean }) {
   };
 
   const handleComplete = async () => {
-    if (!address) return;
+    if (!address || !agreed) return;
     setLoading(true);
     setError("");
 
@@ -327,13 +329,14 @@ function EmailLogin({ agreed }: { agreed: boolean }) {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
               required
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white"
+              disabled={!agreed}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white disabled:opacity-40 disabled:cursor-not-allowed"
             />
           </div>
           <button
             type="submit"
             disabled={loading || !agreed}
-            className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white py-2.5 rounded-lg font-medium"
+            className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-medium"
           >
             {loading ? "Sending..." : "Send Verification Code"}
           </button>
@@ -362,7 +365,7 @@ function EmailLogin({ agreed }: { agreed: boolean }) {
           <button
             type="submit"
             disabled={loading || otp.length !== 6}
-            className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white py-2.5 rounded-lg font-medium"
+            className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-medium"
           >
             {loading ? "Verifying..." : "Verify Code"}
           </button>
@@ -386,7 +389,7 @@ function EmailLogin({ agreed }: { agreed: boolean }) {
             <button
               onClick={handleComplete}
               disabled={loading || !agreed}
-              className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white py-2.5 rounded-lg font-medium"
+              className="w-full bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white py-3 rounded-lg font-medium"
             >
               {loading ? "Signing in..." : "Sign & Login"}
             </button>
@@ -472,7 +475,7 @@ function TelegramLogin({ agreed }: { agreed: boolean }) {
   }, [botConfigured, botUsername, step, handleTelegramAuth]);
 
   const handleComplete = async () => {
-    if (!address) return;
+    if (!address || !agreed) return;
     setLoading(true);
     setError("");
 
@@ -535,7 +538,7 @@ function TelegramLogin({ agreed }: { agreed: boolean }) {
             <button
               onClick={handleComplete}
               disabled={loading || !agreed}
-              className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white py-2.5 rounded-lg font-medium"
+              className="w-full bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white py-3 rounded-lg font-medium"
             >
               {loading ? "Signing in..." : "Sign & Login"}
             </button>
