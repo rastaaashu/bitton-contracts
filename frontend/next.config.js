@@ -17,7 +17,7 @@ const nextConfig = {
             "style-src 'self' 'unsafe-inline'",
             "img-src 'self' data: https:",
             "font-src 'self'",
-            "connect-src 'self' https://*.base.org https://*.alchemy.com https://*.walletconnect.com https://*.walletconnect.org wss://*.walletconnect.com wss://*.walletconnect.org https://api.toncenter.com https://*.render.com",
+            "connect-src 'self' https://*.base.org https://*.alchemy.com https://*.walletconnect.com https://*.walletconnect.org wss://*.walletconnect.com wss://*.walletconnect.org https://api.toncenter.com https://*.onrender.com",
             "frame-src https://oauth.telegram.org https://*.walletconnect.com https://*.walletconnect.org",
             "object-src 'none'",
             "base-uri 'self'",
