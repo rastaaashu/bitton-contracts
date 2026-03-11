@@ -40,7 +40,10 @@ export function verifyTelegramAuth(data: TelegramLoginData): boolean {
     .update(checkString)
     .digest("hex");
 
-  if (hmac !== hash) {
+  // Timing-safe comparison to prevent side-channel attacks
+  const hmacBuf = Buffer.from(hmac, "hex");
+  const hashBuf = Buffer.from(hash, "hex");
+  if (hmacBuf.length !== hashBuf.length || !crypto.timingSafeEqual(hmacBuf, hashBuf)) {
     return false;
   }
 
