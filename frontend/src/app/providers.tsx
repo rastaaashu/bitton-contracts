@@ -7,6 +7,7 @@ import { config } from "@/config/wagmi";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { Toaster } from "sonner";
 import { useState } from "react";
+import { baseSepolia } from "wagmi/chains";
 
 import "@rainbow-me/rainbowkit/styles.css";
 
@@ -16,7 +17,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
-        <RainbowKitProvider theme={darkTheme()}>
+        <RainbowKitProvider
+          theme={darkTheme()}
+          initialChain={baseSepolia}
+          modalSize="compact"
+          appInfo={{
+            appName: "BitTON.AI",
+          }}
+        >
           <AuthProvider>
             {children}
             <Toaster theme="dark" position="top-right" richColors />
